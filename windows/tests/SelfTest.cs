@@ -63,6 +63,7 @@ static unsafe class SelfTest
         Trails();
         Snowmen();
         Clicks();
+        Weather();
         Console.WriteLine(fails == 0 ? "\nAll checks passed." : $"\n{fails} check(s) failed.");
         Environment.Exit(fails == 0 ? 0 : 1);
     }
@@ -361,6 +362,38 @@ static unsafe class SelfTest
             Check(!w.Balls.Contains(mid) && head.Below == null && w.Balls.Contains(bottom),
                   "breaking a snowman's middle lets its head tumble off");
         }
+    }
+
+    // Gusts and fancy flakes
+    static void Weather()
+    {
+        var w = NewWorld(out _);
+        int crystals = 0, sparkles = 0;
+        foreach (var f in w.Flakes) { if (f.Crystal) crystals++; if (f.Sparkle) sparkles++; }
+        Check(crystals > 10 && sparkles > 3, $"some flakes are crystals ({crystals}) and some sparkle ({sparkles})");
+        bool layered = true;
+        foreach (var f in w.Flakes) if (f.Crystal && f.Layer != 2) layered = false;
+        Check(layered, "crystals are only near flakes (the three depth layers stay as they were)");
+
+        Cfg.FancyFlakes = false;
+        var plain = NewWorld(out _);
+        int fancy = 0;
+        foreach (var f in plain.Flakes) if (f.Crystal || f.Sparkle) fancy++;
+        Check(fancy == 0, "crystal and sparkly flakes can be switched off");
+        Cfg.FancyFlakes = true;
+
+        var g = NewWorld(out _);
+        g.StartGust(80);
+        float peak = 0;
+        for (int i = 0; i < 180; i++) { Step(g, 1); peak = MathF.Max(peak, MathF.Abs(g.Wind)); }
+        Check(peak > 45, $"a gust blows noticeably harder than the breeze (peak {peak:0} vs at most 29)");
+
+        Cfg.Gusts = false;
+        var calm = NewWorld(out _);
+        float most = 0;
+        for (int i = 0; i < 60 * 120; i++) { Step(calm, 1); most = MathF.Max(most, MathF.Abs(calm.Wind)); }
+        Check(most <= 29.01f, $"with gusts off the wind stays a breeze for 2 minutes (max {most:0.0})");
+        Cfg.Gusts = true;
     }
 
     static string Snapshot(SnowWorld w)

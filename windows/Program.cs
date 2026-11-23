@@ -54,6 +54,8 @@ static class Cfg
     public const float WobbleKick = 0.02f;         // tilt speed (rad/s) per px/s of knock
     public const float ToppleAngle = 0.45f;        // lean past this (rad) and the snowman falls apart
     public const float NoseKnock = 80;             // knock (px/s) that sends the carrot flying
+    public static bool Gusts = true;               // now and then a gentle gust sweeps the snow sideways (tray menu)
+    public static bool FancyFlakes = true;         // some near flakes are six-armed crystals, a few sparkle (tray menu)
     public const float SoftLanding = 380;          // a ball landing slower than this (px/s, ~a 80 px drop) settles instead of bursting
 
     // Largest snowball allowed on a w × h screen: always finite, and never more than a small share of the
@@ -94,6 +96,7 @@ sealed class Flake
     public int Layer;                // 0 far, 1 middle, 2 near
     public bool Clump;               // sliding off a surface (affected by gravity)
     public bool InFront;             // falls in front of windows
+    public bool Crystal, Sparkle;    // drawn as a turning six-armed crystal / glints now and then
     public long IgnoreId = -1;       // don't land right back on the surface it came from
     public float IgnoreUntil;
 }
@@ -389,6 +392,9 @@ sealed class SnowWorld
         f.Alpha = Rnd.F(L.AlphaMin, L.AlphaMax);
         f.X = Rnd.F(-40, W + 40);
         f.Y = y ?? -Rnd.F(2, 30);
+        float look = Rnd.F(0, 1);
+        f.Crystal = Cfg.FancyFlakes && li == 2 && look < 0.3f;     // a third of the near flakes
+        f.Sparkle = Cfg.FancyFlakes && Rnd.F(0, 1) < 0.06f;       // one flake in sixteen
     }
 
     void SpawnClump(float x, float y, float vx, float vy, long sourceId)
@@ -396,6 +402,7 @@ sealed class SnowWorld
         var f = Obtain();
         f.Clump = true;
         f.InFront = false;
+        f.Crystal = f.Sparkle = false;
         f.Layer = 2;
         f.Size = Rnd.F(2.5f, 5);
         f.Alpha = 0.95f;
@@ -1092,10 +1099,34 @@ sealed class SnowWorld
         }
     }
 
+    // A few sines at different frequencies add up to a gentle breeze; every 25-70 s a gust swells and fades
+    public float Wind { get; private set; }
+    float gustAt = 30, gustStart = -1, gustLen, gustPeak;
+
+    public void StartGust(float strength)
+    {
+        gustStart = t;
+        gustLen = Rnd.F(3, 6);
+        gustPeak = strength;
+    }
+
+    float WindNow()
+    {
+        float w = 14 * MathF.Sin(t * 0.11f) + 9 * MathF.Sin(t * 0.37f + 1.3f) + 6 * MathF.Sin(t * 0.9f + 0.4f);
+        if (gustStart < 0 && Cfg.Gusts && t >= gustAt) StartGust(Rnd.F(45, 90) * (Rnd.F(0, 1) < 0.5f ? -1 : 1));
+        if (gustStart >= 0)
+        {
+            float k = (t - gustStart) / gustLen;
+            if (k >= 1) { gustStart = -1; gustAt = t + Rnd.F(25, 70); }
+            else { float e = MathF.Sin(MathF.PI * k); w += gustPeak * e * e; }   // swells in, dies down
+        }
+        return w;
+    }
+
     void StepFlakes(float dt)
     {
         // A few sines at different frequencies add up to gusty wind
-        float wind = 14 * MathF.Sin(t * 0.11f) + 9 * MathF.Sin(t * 0.37f + 1.3f) + 6 * MathF.Sin(t * 0.9f + 0.4f);
+        float wind = Wind = WindNow();
         int normal = 0;
         for (int i = Flakes.Count - 1; i >= 0; i--)
         {
@@ -1312,6 +1343,31 @@ unsafe static class Render
                           S = MathF.Sign((bx - ax) * (cy - ay) - (by - ay) * (cx - ax)) },
              alpha, cr, cg, cb);
 
+    // A falling flake: a soft dot, or a slowly turning six-armed crystal; sparkly ones glint now and then
+    static void Flake(uint* buf, int bw, int bh, Flake f, float s, float t)
+    {
+        float x = f.X * s, y = f.Y * s, r = f.Size * 1.1f * s;
+        if (f.Crystal)
+        {
+            float a0 = f.Phase + t * 0.5f * (f.SwayFreq - 1.1f), arm = f.Size * 1.25f * s;
+            float width = MathF.Max(0.9f, f.Size * 0.2f) * s;
+            for (int k = 0; k < 3; k++)
+            {
+                float a = a0 + k * MathF.PI / 3, dx = MathF.Cos(a) * arm, dy = MathF.Sin(a) * arm;
+                Line(buf, bw, bh, x - dx, y - dy, x + dx, y + dy, width, f.Alpha * 0.85f, 1, 1, 1);
+            }
+            Disc(buf, bw, bh, x, y, r * 0.45f, f.Alpha);
+        }
+        else Disc(buf, bw, bh, x, y, r, f.Alpha);
+        if (!f.Sparkle) return;
+        float glint = MathF.Pow(MathF.Max(0, MathF.Sin(t * 2.3f + f.Phase * 3)), 8);   // short, bright moments
+        if (glint < 0.05f) return;
+        float g = (f.Size * 2.2f + 2) * s * glint;
+        Line(buf, bw, bh, x - g, y, x + g, y, 0.9f * s, glint, 1, 1, 1);
+        Line(buf, bw, bh, x, y - g, x, y + g, 0.9f * s, glint, 1, 1, 1);
+        Disc(buf, bw, bh, x, y, r * 0.9f, 0.6f * glint, 0.9f, 0.95f, 1);
+    }
+
     // Snowball: lit from the top-left with a bluish shade at the bottom-right, plus specks that turn as it rolls
     public static void Ball(uint* buf, int bw, int bh, Snowball ball, float s, float t)
     {
@@ -1484,7 +1540,7 @@ unsafe static class Render
     {
         new Span<uint>(buf, bw * bh).Clear();
         // far + middle flakes, piles, lights, clumps, snowballs, near flakes, then the ball being carried
-        foreach (var f in w.Flakes) if (!f.Clump && f.Layer < 2) Disc(buf, bw, bh, f.X * s, f.Y * s, f.Size * 1.1f * s, f.Alpha);
+        foreach (var f in w.Flakes) if (!f.Clump && f.Layer < 2) Flake(buf, bw, bh, f, s, w.T);
         foreach (var p in w.Piles.Values) Pile(buf, bw, bh, p, s);
         Pile(buf, bw, bh, w.Ground, s);
         Trails(buf, bw, bh, w, s);
@@ -1495,7 +1551,7 @@ unsafe static class Render
         drawBalls.Sort((u, v) => v.Y.CompareTo(u.Y));   // lower balls first, so a snowman's head sits on top
         foreach (var b in drawBalls) Ball(buf, bw, bh, b, s, w.T);
         foreach (var c in w.Carrots) Carrot(buf, bw, bh, c, s, w.T);
-        foreach (var f in w.Flakes) if (!f.Clump && f.Layer == 2) Disc(buf, bw, bh, f.X * s, f.Y * s, f.Size * 1.1f * s, f.Alpha);
+        foreach (var f in w.Flakes) if (!f.Clump && f.Layer == 2) Flake(buf, bw, bh, f, s, w.T);
         if (w.DragBall != null) Ball(buf, bw, bh, w.DragBall, s, w.T);
     }
 
@@ -1552,7 +1608,7 @@ static unsafe class Program
               CMD_LIGHT = 10, CMD_MEDIUM = 11, CMD_HEAVY = 12,
               CMD_GROWTH = 20,      // + growth mode 0..3
               CMD_MAXBALLS = 30,    // + index into MaxBallChoices
-              CMD_TRAILS = 40, CMD_CARROT = 41;
+              CMD_TRAILS = 40, CMD_CARROT = 41, CMD_GUSTS = 42, CMD_FANCY = 43;
     static readonly int[] MaxBallChoices = { 10, 20, 40 };
     const string RegKey = @"Software\desktopsnowfall";
 
@@ -1881,7 +1937,10 @@ static unsafe class Program
         AppendMenuW(amount, MF_STRING | (Cfg.TargetFlakes == 120 ? MF_CHECKED : 0), (UIntPtr)CMD_LIGHT, "Light");
         AppendMenuW(amount, MF_STRING | (Cfg.TargetFlakes == 260 ? MF_CHECKED : 0), (UIntPtr)CMD_MEDIUM, "Medium");
         AppendMenuW(amount, MF_STRING | (Cfg.TargetFlakes == 500 ? MF_CHECKED : 0), (UIntPtr)CMD_HEAVY, "Heavy");
-        AppendMenuW(menu, MF_POPUP, (UIntPtr)(ulong)amount.ToInt64(), "Snow amount");
+        AppendMenuW(amount, MF_SEPARATOR, UIntPtr.Zero, null);
+        AppendMenuW(amount, MF_STRING | (Cfg.Gusts ? MF_CHECKED : 0), (UIntPtr)CMD_GUSTS, "Wind &gusts");
+        AppendMenuW(amount, MF_STRING | (Cfg.FancyFlakes ? MF_CHECKED : 0), (UIntPtr)CMD_FANCY, "&Crystal and sparkly flakes");
+        AppendMenuW(menu, MF_POPUP, (UIntPtr)(ulong)amount.ToInt64(), "S&now");
         IntPtr balls = CreatePopupMenu();
         for (int i = 0; i < 4; i++)
         {
@@ -1925,6 +1984,14 @@ static unsafe class Program
                 break;
             case CMD_GUIDE: ShowGuide(); break;
             case CMD_QUIT: Quit(); break;
+            case CMD_GUSTS:
+                Cfg.Gusts = !Cfg.Gusts;
+                WriteSetting("Gusts", Cfg.Gusts);
+                break;
+            case CMD_FANCY:
+                Cfg.FancyFlakes = !Cfg.FancyFlakes;   // new flakes pick it up as they fall in
+                WriteSetting("FancyFlakes", Cfg.FancyFlakes);
+                break;
             case CMD_CARROT:
                 Cfg.CarrotFalls = !Cfg.CarrotFalls;
                 WriteSetting("CarrotFalls", Cfg.CarrotFalls);
@@ -1970,6 +2037,8 @@ static unsafe class Program
         Cfg.MaxBalls = Array.IndexOf(MaxBallChoices, mb) >= 0 ? mb : 20;
         Cfg.Trails = ReadInt("Trails", 1) != 0;
         Cfg.CarrotFalls = ReadInt("CarrotFalls", 1) != 0;
+        Cfg.Gusts = ReadInt("Gusts", 1) != 0;
+        Cfg.FancyFlakes = ReadInt("FancyFlakes", 1) != 0;
     }
 
     static int ReadInt(string name, int def)
