@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using Microsoft.Win32;
 
 namespace desktopsnowfall;
 
@@ -70,6 +71,7 @@ static unsafe class SelfTest
         Throwing();
         Personalities();
         FairyLights();
+        Settings();
         Console.WriteLine(fails == 0 ? "\nAll checks passed." : $"\n{fails} check(s) failed.");
         Environment.Exit(fails == 0 ? 0 : 1);
     }
@@ -880,6 +882,43 @@ static unsafe class SelfTest
                 Console.WriteLine($"INFO  a frame with fairy lights on a 1200 px window: {sw.Elapsed.TotalMilliseconds / 30:0.00} ms");
             }
             Check(alloc == 0, $"every color and pattern draws without allocating ({alloc} bytes)");
+        }
+    }
+
+    // Settings are saved in the registry; bad values (edited by hand, from an old version) are made safe
+    static void Settings()
+    {
+        string keep = Program.RegKey;
+        Program.RegKey = @"Software\desktopsnowfall-selftest";
+        try
+        {
+            Program.WriteInt("GrowthMode", 99);
+            Program.WriteInt("ExperimentalMaxRadius", -5);
+            Program.WriteInt("MaxBalls", 7);
+            Program.WriteInt("LightPreset", 50);
+            Program.WriteInt("LightPattern", -3);
+            Program.WriteInt("SnowAmount", 12345);
+            Program.WriteInt("PerfMode", 9);
+            Program.LoadSettings();
+            Check(Cfg.GrowthMode == 3 && Cfg.ExperimentalMaxRadius == 4 && Cfg.MaxBalls == 20 && Cfg.LightPreset == 5 &&
+                  Cfg.LightPattern == 0 && Cfg.TargetFlakes == 260 && Cfg.PerfMode == 1,
+                  "invalid saved settings are clamped to safe values");
+
+            Program.WriteInt("GrowthMode", 2);
+            Program.WriteInt("SnowAmount", 500);
+            Program.WriteInt("Visitor1", 0);
+            Program.LoadSettings();
+            Check(Cfg.GrowthMode == 2 && Cfg.TargetFlakes == 500 && !Cfg.Visitors[1], "settings are read back after a restart");
+
+            Program.ResetSettings();
+            Check(Cfg.GrowthMode == 0 && Cfg.TargetFlakes == 260 && Cfg.Visitors[1] && Cfg.LightPattern == 5 && Cfg.MaxBalls == 20,
+                  "reset all settings goes back to the defaults");
+        }
+        finally
+        {
+            Registry.CurrentUser.DeleteSubKeyTree(Program.RegKey, false);
+            Program.RegKey = keep;
+            Program.LoadSettings();
         }
     }
 

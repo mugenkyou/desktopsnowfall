@@ -36,6 +36,9 @@ static class Cfg
     public const bool FlakesInFront = true;        // some of the smallest flakes fall in front of windows
     public const float InFrontFraction = 0.4f;     // share of the smallest layer that falls in front
     public const int FrameMs = 16;                 // timer interval (~60 fps)
+    public const int SaverFrameMs = 33;            // battery saver: ~30 fps
+    public static int PerfMode = 0;                // 0 smooth (60 fps), 1 battery saver (30 fps) (tray menu)
+    public static bool SaveOnBattery = true;       // switch to battery saver automatically when unplugged (tray menu)
     public const float BallStartRadius = 3;        // a new snowball starts this small
     public static int GrowthMode = 0;              // 0 Normal, 1 Large, 2 Giant, 3 Experimental (tray menu)
     public static readonly string[] GrowthNames = { "Normal", "Large", "Giant", "Experimental" };
@@ -2400,7 +2403,11 @@ static unsafe class Program
     const int GWL_EXSTYLE = -20;
     const uint WM_DESTROY = 0x2, WM_TIMER = 0x113, WM_DISPLAYCHANGE = 0x7E, WM_NULL = 0,
                WM_APP = 0x8000, WM_LBUTTONDOWN = 0x201, WM_LBUTTONUP = 0x202, WM_RBUTTONDOWN = 0x204, WM_RBUTTONUP = 0x205,
-               WM_MOUSEACTIVATE = 0x21, WM_CAPTURECHANGED = 0x215;
+               WM_MOUSEACTIVATE = 0x21, WM_CAPTURECHANGED = 0x215, WM_DPICHANGED = 0x2E0, WM_ENDSESSION = 0x16,
+               WM_WTSSESSION_CHANGE = 0x2B1, WM_POWERBROADCAST = 0x218;
+    const int WTS_SESSION_LOCK = 7, WTS_SESSION_UNLOCK = 8, PBT_APMPOWERSTATUSCHANGE = 0xA, PBT_POWERSETTINGCHANGE = 0x8013;
+    const int QUNS_RUNNING_D3D_FULL_SCREEN = 3, QUNS_PRESENTATION_MODE = 4;
+    static readonly Guid GUID_CONSOLE_DISPLAY_STATE = new("6FE69556-704A-47A0-8F24-C28D936FDA47");
     const int MA_NOACTIVATE = 3;
     const uint MB_ICONINFORMATION = 0x40, MB_SETFOREGROUND = 0x10000, MB_TOPMOST = 0x40000;
     const uint WM_TRAY = WM_APP + 1;
@@ -2408,7 +2415,7 @@ static unsafe class Program
     const uint ULW_ALPHA = 2;
     const int DWMWA_EXTENDED_FRAME_BOUNDS = 9, DWMWA_CLOAKED = 14;
     const uint NIM_ADD = 0, NIM_MODIFY = 1, NIM_DELETE = 2, NIF_MESSAGE = 1, NIF_ICON = 2, NIF_TIP = 4, NIF_INFO = 0x10, NIIF_INFO = 1;
-    const uint MF_STRING = 0, MF_CHECKED = 8, MF_POPUP = 0x10, MF_SEPARATOR = 0x800;
+    const uint MF_STRING = 0, MF_GRAYED = 1, MF_CHECKED = 8, MF_POPUP = 0x10, MF_SEPARATOR = 0x800;
     const uint TPM_RIGHTBUTTON = 0x2, TPM_RETURNCMD = 0x100;
     const int CMD_PAUSE = 1, CMD_CLEAR = 2, CMD_QUIT = 3, CMD_LIGHTS = 4, CMD_GUIDE = 5,
               CMD_LIGHT = 10, CMD_MEDIUM = 11, CMD_HEAVY = 12,
@@ -2419,9 +2426,12 @@ static unsafe class Program
               CMD_INVITE = 55,
               CMD_PRESET = 60,      // + preset
               CMD_PATTERN = 70,     // + pattern
-              CMD_WIRESNOW = 80;
+              CMD_WIRESNOW = 80,
+              CMD_PERF = 90,        // + mode
+              CMD_BATTERY = 95, CMD_STARTUP = 96, CMD_RESET = 97;
     static readonly int[] MaxBallChoices = { 10, 20, 40 };
-    const string RegKey = @"Software\desktopsnowfall";
+    internal static string RegKey = @"Software\desktopsnowfall";   // the self-tests point this at a scratch key
+    const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
 
     // --- structs
     [StructLayout(LayoutKind.Sequential)] struct RECT { public int Left, Top, Right, Bottom; }
@@ -2511,6 +2521,22 @@ static unsafe class Program
     [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hwnd, int attr, out int value, int size);
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)] static extern bool Shell_NotifyIconW(uint msg, ref NOTIFYICONDATAW data);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern IntPtr GetModuleHandleW(string name);
+    [DllImport("wtsapi32.dll")] static extern bool WTSRegisterSessionNotification(IntPtr hWnd, int flags);
+    [DllImport("wtsapi32.dll")] static extern bool WTSUnRegisterSessionNotification(IntPtr hWnd);
+    [DllImport("user32.dll")] static extern IntPtr RegisterPowerSettingNotification(IntPtr hWnd, ref Guid setting, int flags);
+    [DllImport("user32.dll")] static extern bool UnregisterPowerSettingNotification(IntPtr handle);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern uint RegisterWindowMessageW(string name);
+    [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr hWnd, IntPtr hdc);
+    [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr icon);
+    [DllImport("gdi32.dll")] static extern bool DeleteDC(IntPtr hdc);
+    [DllImport("shell32.dll")] static extern int SHQueryUserNotificationState(out int state);
+    [DllImport("kernel32.dll")] static extern bool GetSystemPowerStatus(out SYSTEM_POWER_STATUS status);
+    [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint flags);
+    [DllImport("user32.dll")] static extern bool GetMonitorInfoW(IntPtr monitor, ref MONITORINFO info);
+    [StructLayout(LayoutKind.Sequential)] struct MONITORINFO { public int cbSize; public RECT rcMonitor, rcWork; public uint dwFlags; }
+    [StructLayout(LayoutKind.Sequential)]
+    struct SYSTEM_POWER_STATUS { public byte ACLineStatus, BatteryFlag, BatteryLifePercent, SystemStatusFlag; public int BatteryLifeTime, BatteryFullLifeTime; }
 
     // --- state
     static WndProcFn wndProc;                 // kept alive so the GC doesn't collect the callback
@@ -2524,6 +2550,15 @@ static unsafe class Program
     static bool paused;
     static bool catching;                     // overlay currently takes clicks (mouse is over a snowball)
     static bool aimTipShown;                  // the "flick to throw, Shift to aim" tip, once per launch
+    // Not drawing while nobody can see it: screen locked, display off, or a fullscreen app (game, video,
+    // presentation) in front. Checked by notifications (lock, display) and every half second (fullscreen).
+    static bool locked, displayOff, fullscreenApp, hiddenNow;
+    static bool Suspended => locked || displayOff || fullscreenApp;
+    static int fullscreenCheck, frameMs, slowFrames;
+    static bool slowMachine;                  // frames kept taking too long at 60 fps: run at 30
+    static double workMs;                     // smoothed time spent simulating + drawing a frame
+    static uint taskbarCreated;               // Explorer restarted: put the tray icon back
+    static IntPtr powerNotify;
     static readonly List<Win> found = new();
     static readonly StringBuilder clsName = new(64);
 
@@ -2564,7 +2599,11 @@ static unsafe class Program
 
         ShowWindow(overlay, SW_SHOWNOACTIVATE);
         AddTrayIcon();
-        SetTimer(overlay, (UIntPtr)1, Cfg.FrameMs, IntPtr.Zero);
+        taskbarCreated = RegisterWindowMessageW("TaskbarCreated");
+        WTSRegisterSessionNotification(tray, 0);                // lock / unlock
+        var displayState = GUID_CONSOLE_DISPLAY_STATE;
+        powerNotify = RegisterPowerSettingNotification(tray, ref displayState, 0);   // display on / off
+        ApplyFrameRate();
         // Show the how-to-play tips once, the very first time the app opens
         if (!ReadSetting("SeenGuide"))
         {
@@ -2628,20 +2667,82 @@ static unsafe class Program
                 if (hWnd == overlay) world.EndDrag();
                 return IntPtr.Zero;
             case WM_DISPLAYCHANGE:
+            case WM_DPICHANGED:                 // display scaling changed: re-measure, no restart needed
                 if (hWnd == overlay)
                 {
                     bw = GetSystemMetrics(0);
                     bh = GetSystemMetrics(1);
+                    uint dpi = GetDpiForWindow(overlay);
+                    if (dpi > 0) scale = dpi / 96f;
                     CreateSurface();
                     world.Resize(bw / scale, bh / scale);
                 }
+                return IntPtr.Zero;
+            case WM_WTSSESSION_CHANGE:
+                if (wParam == WTS_SESSION_LOCK) locked = true;
+                else if (wParam == WTS_SESSION_UNLOCK) locked = false;
+                UpdateVisibility();
+                return IntPtr.Zero;
+            case WM_POWERBROADCAST:
+                if (wParam == PBT_POWERSETTINGCHANGE && lParam != IntPtr.Zero)
+                {
+                    // POWERBROADCAST_SETTING: a GUID, a length, then the value (0 off, 1 on, 2 dimmed)
+                    var guid = Marshal.PtrToStructure<Guid>(lParam);
+                    if (guid == GUID_CONSOLE_DISPLAY_STATE) displayOff = Marshal.ReadInt32(lParam, 20) == 0;
+                    UpdateVisibility();
+                }
+                else if (wParam == PBT_APMPOWERSTATUSCHANGE) ApplyFrameRate();   // plugged in or unplugged
+                return (IntPtr)1;
+            case WM_ENDSESSION:
+                if (wParam != IntPtr.Zero) Cleanup();   // logging off or shutting down
                 return IntPtr.Zero;
             case WM_TRAY:
                 uint ev = (uint)(lParam.ToInt64() & 0xFFFF);
                 if (ev == WM_RBUTTONUP || ev == WM_LBUTTONUP) ShowMenu();
                 return IntPtr.Zero;
         }
+        if (msg == taskbarCreated && taskbarCreated != 0)
+        {
+            var nid = TrayData();
+            nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+            Shell_NotifyIconW(NIM_ADD, ref nid);
+            return IntPtr.Zero;
+        }
         return DefWindowProcW(hWnd, msg, wParam, lParam);
+    }
+
+    // Show the overlay only when snow is wanted and someone can see it
+    static void UpdateVisibility()
+    {
+        bool hide = paused || Suspended;
+        if (hide == hiddenNow) return;
+        hiddenNow = hide;
+        ShowWindow(overlay, hide ? SW_HIDE : SW_SHOWNOACTIVATE);
+    }
+
+    // The app in front covers its whole monitor, taskbar included (a video, a game, a slideshow, F11 in a browser).
+    // A maximized window doesn't count: it leaves the taskbar visible.
+    static bool ForegroundIsFullscreen()
+    {
+        IntPtr fg = GetForegroundWindow();
+        if (fg == IntPtr.Zero || fg == overlay || fg == tray) return false;
+        clsName.Clear();
+        GetClassNameW(fg, clsName, clsName.Capacity);
+        string cls = clsName.ToString();
+        if (cls is "Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd") return false;
+        if (!GetWindowRect(fg, out RECT r)) return false;
+        var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+        if (!GetMonitorInfoW(MonitorFromWindow(fg, 2), ref mi)) return false;
+        return r.Left <= mi.rcMonitor.Left && r.Top <= mi.rcMonitor.Top && r.Right >= mi.rcMonitor.Right && r.Bottom >= mi.rcMonitor.Bottom;
+    }
+
+    static bool OnBattery() => GetSystemPowerStatus(out var st) && st.ACLineStatus == 0;
+
+    static void ApplyFrameRate()
+    {
+        bool saver = Cfg.PerfMode == 1 || (Cfg.SaveOnBattery && OnBattery()) || slowMachine;
+        frameMs = saver ? Cfg.SaverFrameMs : Cfg.FrameMs;
+        SetTimer(overlay, (UIntPtr)1, (uint)frameMs, IntPtr.Zero);   // replaces the running timer
     }
 
     static void Tick()
@@ -2649,7 +2750,16 @@ static unsafe class Program
         double now = clock.Elapsed.TotalSeconds;
         float dt = (float)Math.Min(now - lastT, 1.0 / 20);
         lastT = now;
-        if (paused) return;
+        if (++fullscreenCheck >= 30)
+        {
+            fullscreenCheck = 0;
+            // (Not QUNS_BUSY: Windows reports that for our own full-screen topmost overlay, too)
+            fullscreenApp = ForegroundIsFullscreen() ||
+                            (SHQueryUserNotificationState(out int st) == 0 && st is QUNS_RUNNING_D3D_FULL_SCREEN or QUNS_PRESENTATION_MODE);
+            UpdateVisibility();
+        }
+        if (paused || Suspended) return;
+        long started = Stopwatch.GetTimestamp();
 
         GetCursorPos(out POINT m);
         world.MouseX = m.X / scale;
@@ -2664,6 +2774,14 @@ static unsafe class Program
         var size = new SIZE { cx = bw, cy = bh };
         var blend = new BLENDFUNCTION { BlendOp = 0, SourceConstantAlpha = 255, AlphaFormat = 1 };   // AC_SRC_ALPHA
         UpdateLayeredWindow(overlay, screenDC, ref dst, ref size, memDC, ref src, 0, ref blend, ULW_ALPHA);
+
+        // Adaptive: if frames keep taking most of the 60 fps budget (a slow machine, a huge screen), drop to 30 fps
+        workMs = workMs * 0.95 + Stopwatch.GetElapsedTime(started).TotalMilliseconds * 0.05;
+        if (!slowMachine && frameMs == Cfg.FrameMs)
+        {
+            slowFrames = workMs > 12 ? slowFrames + 1 : 0;
+            if (slowFrames > 180) { slowMachine = true; ApplyFrameRate(); }
+        }
     }
 
     // The overlay normally lets every click through. Only while the mouse is over a snowball (or carrying one)
@@ -2756,6 +2874,9 @@ static unsafe class Program
     static void ShowMenu()
     {
         IntPtr menu = CreatePopupMenu(), amount = CreatePopupMenu();
+        var ver = typeof(Program).Assembly.GetName().Version;
+        AppendMenuW(menu, MF_STRING | MF_GRAYED, UIntPtr.Zero, $"desktopsnowfall {ver.Major}.{ver.Minor}.{ver.Build}");
+        AppendMenuW(menu, MF_SEPARATOR, UIntPtr.Zero, null);
         AppendMenuW(menu, MF_STRING, (UIntPtr)CMD_PAUSE, paused ? "Resume snow" : "Pause snow");
         AppendMenuW(amount, MF_STRING | (Cfg.TargetFlakes == 120 ? MF_CHECKED : 0), (UIntPtr)CMD_LIGHT, "Light");
         AppendMenuW(amount, MF_STRING | (Cfg.TargetFlakes == 260 ? MF_CHECKED : 0), (UIntPtr)CMD_MEDIUM, "Medium");
@@ -2797,6 +2918,15 @@ static unsafe class Program
         AppendMenuW(menu, MF_STRING, (UIntPtr)CMD_CLEAR, "&Clear snow");
         AppendMenuW(menu, MF_STRING, (UIntPtr)CMD_GUIDE, "&How to Play ❔");
         AppendMenuW(menu, MF_SEPARATOR, UIntPtr.Zero, null);
+        IntPtr perf = CreatePopupMenu();
+        AppendMenuW(perf, MF_STRING | (Cfg.PerfMode == 0 ? MF_CHECKED : 0), (UIntPtr)(uint)CMD_PERF, "Smooth (60 fps)");
+        AppendMenuW(perf, MF_STRING | (Cfg.PerfMode == 1 ? MF_CHECKED : 0), (UIntPtr)(uint)(CMD_PERF + 1), "Battery saver (30 fps)");
+        AppendMenuW(perf, MF_SEPARATOR, UIntPtr.Zero, null);
+        AppendMenuW(perf, MF_STRING | (Cfg.SaveOnBattery ? MF_CHECKED : 0), (UIntPtr)CMD_BATTERY, "Save power when unplugged");
+        AppendMenuW(menu, MF_POPUP, (UIntPtr)(ulong)perf.ToInt64(), "&Performance");
+        AppendMenuW(menu, MF_STRING | (StartsWithWindows() ? MF_CHECKED : 0), (UIntPtr)CMD_STARTUP, "Start with &Windows");
+        AppendMenuW(menu, MF_STRING, (UIntPtr)CMD_RESET, "&Reset all settings");
+        AppendMenuW(menu, MF_SEPARATOR, UIntPtr.Zero, null);
         AppendMenuW(menu, MF_STRING, (UIntPtr)CMD_QUIT, "Quit");
 
         GetCursorPos(out POINT pt);
@@ -2809,11 +2939,30 @@ static unsafe class Program
         {
             case CMD_PAUSE:
                 paused = !paused;
-                ShowWindow(overlay, paused ? SW_HIDE : SW_SHOWNOACTIVATE);
+                UpdateVisibility();
                 break;
-            case CMD_LIGHT: Cfg.TargetFlakes = 120; break;
-            case CMD_MEDIUM: Cfg.TargetFlakes = 260; break;
-            case CMD_HEAVY: Cfg.TargetFlakes = 500; break;
+            case CMD_LIGHT: Cfg.TargetFlakes = 120; WriteInt("SnowAmount", 120); break;
+            case CMD_MEDIUM: Cfg.TargetFlakes = 260; WriteInt("SnowAmount", 260); break;
+            case CMD_HEAVY: Cfg.TargetFlakes = 500; WriteInt("SnowAmount", 500); break;
+            case CMD_PERF:
+            case CMD_PERF + 1:
+                Cfg.PerfMode = cmd - CMD_PERF;
+                WriteInt("PerfMode", Cfg.PerfMode);
+                slowMachine = false;
+                ApplyFrameRate();
+                break;
+            case CMD_BATTERY:
+                Cfg.SaveOnBattery = !Cfg.SaveOnBattery;
+                WriteSetting("SaveOnBattery", Cfg.SaveOnBattery);
+                ApplyFrameRate();
+                break;
+            case CMD_STARTUP: SetStartWithWindows(!StartsWithWindows()); break;
+            case CMD_RESET:
+                ResetSettings();
+                world.LightsOn = false;
+                world.UpdateLights();
+                ApplyFrameRate();
+                break;
             case CMD_CLEAR: world.ClearAll(); break;
             case CMD_LIGHTS:
                 world.LightsOn = !world.LightsOn;
@@ -2901,8 +3050,12 @@ static unsafe class Program
     }
 
     // Settings live in HKCU\Software\desktopsnowfall; values from the registry are clamped to sane ranges
-    static void LoadSettings()
+    internal static void LoadSettings()
     {
+        int amount = ReadInt("SnowAmount", 260);
+        Cfg.TargetFlakes = amount is 120 or 260 or 500 ? amount : 260;
+        Cfg.PerfMode = Math.Clamp(ReadInt("PerfMode", 0), 0, 1);
+        Cfg.SaveOnBattery = ReadInt("SaveOnBattery", 1) != 0;
         Cfg.GrowthMode = Math.Clamp(ReadInt("GrowthMode", 0), 0, 3);
         Cfg.ExperimentalMaxRadius = Math.Clamp(ReadInt("ExperimentalMaxRadius", 100), 4, 1000);
         int mb = ReadInt("MaxBalls", 20);
@@ -2917,13 +3070,36 @@ static unsafe class Program
         Cfg.FancyFlakes = ReadInt("FancyFlakes", 1) != 0;
     }
 
-    static int ReadInt(string name, int def)
+    // Forget every choice (snow amount, sizes, lights, visitors, performance...) and go back to the defaults.
+    // "Start with Windows" is left as it is: that's a separate system setting.
+    internal static void ResetSettings()
+    {
+        bool seen = ReadSetting("SeenGuide");
+        Registry.CurrentUser.DeleteSubKeyTree(RegKey, false);
+        if (seen) WriteSetting("SeenGuide", true);
+        LoadSettings();
+    }
+
+    static bool StartsWithWindows()
+    {
+        using var k = Registry.CurrentUser.OpenSubKey(RunKey);
+        return k?.GetValue("desktopsnowfall") is string v && v.Contains(Environment.ProcessPath ?? "", StringComparison.OrdinalIgnoreCase);
+    }
+
+    static void SetStartWithWindows(bool on)
+    {
+        using var k = Registry.CurrentUser.CreateSubKey(RunKey);
+        if (on) k.SetValue("desktopsnowfall", $"\"{Environment.ProcessPath}\"");
+        else k.DeleteValue("desktopsnowfall", false);
+    }
+
+    internal static int ReadInt(string name, int def)
     {
         using var k = Registry.CurrentUser.OpenSubKey(RegKey);
         return k?.GetValue(name) is int v ? v : def;
     }
 
-    static void WriteInt(string name, int value)
+    internal static void WriteInt(string name, int value)
     {
         using var k = Registry.CurrentUser.CreateSubKey(RegKey);
         k.SetValue(name, value, RegistryValueKind.DWord);
@@ -2934,11 +3110,23 @@ static unsafe class Program
 
     static void Quit()
     {
-        KillTimer(overlay, (UIntPtr)1);
-        var nid = TrayData();
-        Shell_NotifyIconW(NIM_DELETE, ref nid);
+        Cleanup();
         DestroyWindow(overlay);
         DestroyWindow(tray);
         PostQuitMessage(0);
+    }
+
+    // Give back everything borrowed from Windows (safe to call twice)
+    static void Cleanup()
+    {
+        KillTimer(overlay, (UIntPtr)1);
+        var nid = TrayData();
+        Shell_NotifyIconW(NIM_DELETE, ref nid);
+        WTSUnRegisterSessionNotification(tray);
+        if (powerNotify != IntPtr.Zero) { UnregisterPowerSettingNotification(powerNotify); powerNotify = IntPtr.Zero; }
+        if (trayIcon != IntPtr.Zero) { DestroyIcon(trayIcon); trayIcon = IntPtr.Zero; }
+        if (memDC != IntPtr.Zero) { DeleteDC(memDC); memDC = IntPtr.Zero; }
+        if (dib != IntPtr.Zero) { DeleteObject(dib); dib = IntPtr.Zero; }
+        if (screenDC != IntPtr.Zero) { ReleaseDC(IntPtr.Zero, screenDC); screenDC = IntPtr.Zero; }
     }
 }

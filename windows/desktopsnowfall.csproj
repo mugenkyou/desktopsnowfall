@@ -9,6 +9,13 @@
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <!-- Version shown in the tray menu and the exe's Properties; the release workflow sets it from the git tag -->
+    <Version>1.1.0</Version>
+    <Product>desktopsnowfall</Product>
+    <Company>mugenkyou</Company>
+    <Description>Snow on your desktop</Description>
+    <Copyright>Copyright (c) 2026 mugenkyou</Copyright>
   </PropertyGroup>
 
   <ItemGroup>
