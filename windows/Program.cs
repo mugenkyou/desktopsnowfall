@@ -60,6 +60,9 @@ static class Cfg
     public static readonly string[] VisitorNames = { "Penguin", "Snow fox", "Rabbit" };
     public const float FirstVisit = 40;            // the first visitor comes after this long (s)
     public const float VisitGapMin = 60, VisitGapMax = 150;   // then one every 1-2.5 minutes
+    public const float ThrowSpeed = 450;           // letting go faster than this (px/s) throws; slower just sets the ball down
+    public const float ThrowMax = 1800;            // fastest throw (px/s)
+    public const float SlingGain = 6;              // Shift-aiming: launch speed (px/s) per px the mouse is pulled back
     public const float SoftLanding = 380;          // a ball landing slower than this (px/s, ~a 80 px drop) settles instead of bursting
 
     // Largest snowball allowed on a w × h screen: always finite, and never more than a small share of the
@@ -190,6 +193,9 @@ sealed class Snowball
     public float TrailAcc;           // distance rolled since the last trail mark
     public float Wobble, WobbleV;    // tilt of a stack resting on this ball (rad, + leans right) and its speed
     public bool NoseLost;            // snowman head whose carrot was knocked off
+    public bool Thrown;              // flying after a throw: bursts on whatever it hits
+    public float ThrownAt, FromX, FromY;   // when and where it was thrown from
+    public Visitor ThrownBy;         // a visitor's throw doesn't hit the thrower
     public float Mass => MathF.Max(1, R * R / (Cfg.BallMassRadius * Cfg.BallMassRadius));
     public readonly (float Ang, float Dist, float Size, float Alpha)[] Specks = new (float, float, float, float)[20];
 
@@ -202,7 +208,7 @@ sealed class Snowball
 
     public void Drop(float vx, float vy)
     {
-        Falling = true; Dragging = false; Hidden = false;
+        Falling = true; Dragging = false; Hidden = false; Thrown = false;
         Pile = null; Below = null;
         Vx = vx; Vy = vy;
     }
@@ -329,6 +335,11 @@ sealed class SnowWorld
     Snowball activeBall, dragBall;
     public Snowball DragBall => dragBall;
     public float MouseX, MouseY;                 // cursor, set by the caller every frame
+    public bool AimKey;                          // Shift held: slingshot aiming (set by the caller)
+    bool aiming;
+    float aimX, aimY, launchVx, launchVy;
+    public readonly float[] Path = new float[48];   // predicted flight of the ball being thrown: x, y pairs
+    public int PathCount;
     float lastMx = float.NaN, dragOffX, dragOffY, dragVx, dragVy;
 
     public bool LightsOn;
@@ -620,6 +631,14 @@ sealed class SnowWorld
         if (b == null) return;
         dragBall = null;
         b.Dragging = false;
+        PathCount = 0;
+        bool sling = aiming;
+        aiming = false;
+        if (sling || dragVx * dragVx + dragVy * dragVy > Cfg.ThrowSpeed * Cfg.ThrowSpeed)
+        {
+            var (vx, vy) = sling ? Launch(b, launchVx, launchVy) : Launch(b, dragVx, dragVy);
+            if (vx * vx + vy * vy > 60 * 60) { Throw(b, vx, vy); return; }   // a barely pulled slingshot just lets go
+        }
         var target = StackTarget(b);
         if (target != null)
         {
@@ -637,6 +656,24 @@ sealed class SnowWorld
 
     void StepDrag(Snowball b, float dt)
     {
+        lastMx = MouseX;
+        if (AimKey)
+        {
+            // Slingshot: the ball stays where it is; pull the mouse back and let go to throw
+            if (!aiming) { aiming = true; aimX = b.X; aimY = b.Y; }
+            b.X = aimX; b.Y = aimY;
+            launchVx = (aimX - (MouseX + dragOffX)) * Cfg.SlingGain;
+            launchVy = (aimY - (MouseY + dragOffY)) * Cfg.SlingGain;
+            var (lx, ly) = Launch(b, launchVx, launchVy);
+            Predict(b.X, b.Y, b.R, lx, ly);
+            return;
+        }
+        if (aiming)
+        {
+            aiming = false;                  // Shift released: carry it on from here
+            dragOffX = b.X - MouseX; dragOffY = b.Y - MouseY;
+            dragVx = dragVy = 0;
+        }
         float tx = MouseX + dragOffX, ty = MouseY + dragOffY;
         if (dt > 0)
         {
@@ -645,7 +682,111 @@ sealed class SnowWorld
         }
         b.Rot += (tx - b.X) / b.R;
         b.X = tx; b.Y = ty;
-        lastMx = MouseX;
+        // While it's being flicked, show where it would fly
+        if (dragVx * dragVx + dragVy * dragVy > Cfg.ThrowSpeed * Cfg.ThrowSpeed)
+        {
+            var (vx, vy) = Launch(b, dragVx, dragVy);
+            Predict(b.X, b.Y, b.R, vx, vy);
+        }
+        else PathCount = 0;
+    }
+
+    // How fast a ball leaves the hand: heavier balls need more force, so they fly slower
+    static (float, float) Launch(Snowball b, float vx, float vy)
+    {
+        float k = 1 / MathF.Sqrt(b.Mass), sp = MathF.Sqrt(vx * vx + vy * vy) * k;
+        if (sp > Cfg.ThrowMax) k *= Cfg.ThrowMax / sp;
+        return (vx * k, vy * k);
+    }
+
+    public void Throw(Snowball b, float vx, float vy, Visitor by = null)
+    {
+        b.Drop(vx, vy);
+        b.Thrown = true;
+        b.ThrownAt = t;
+        b.FromX = b.X; b.FromY = b.Y;
+        b.ThrownBy = by;
+    }
+
+    // Trace the first 0.8 s of a throw (same gravity and surfaces as the real flight), for the dotted guide
+    void Predict(float x, float y, float r, float vx, float vy)
+    {
+        PathCount = 0;
+        const float h = 1f / 30;
+        for (int i = 0; i < Path.Length / 2; i++)
+        {
+            float px = x, py = y;
+            vy += Cfg.Gravity * h;
+            x += vx * h;
+            y += vy * h;
+            if (x < -50 || x > W + 50 || y > H + 50) break;
+            if (vy > 0 && LandingSurface(x, py + r, y + r, onEdge: true) != null) break;
+            if (HitsWindow(x, y, px, py)) break;
+            Path[2 * PathCount] = x;
+            Path[2 * PathCount + 1] = y;
+            PathCount++;
+        }
+    }
+
+    // Did this step carry a point into a window from outside it?
+    bool HitsWindow(float x, float y, float px, float py)
+    {
+        foreach (var w in Order) if (w.Contains(x, y) && !w.Contains(px, py)) return true;
+        return false;
+    }
+
+    // A thrown snowball bursts on the first thing it meets: a visitor, a snowball or snowman, or a window
+    bool ThrownHit(Snowball b, float px, float py)
+    {
+        var v = Visitor;
+        if (v != null && b.ThrownBy != v && VisitorHit(v, b))
+        {
+            Puff(b.X, b.Y, b.R, b.Vx * 0.2f);
+            HitVisitor(v, b);
+            return true;
+        }
+        foreach (var o in Balls)
+        {
+            if (o == b || o.Falling || o.Dragging || o.Hidden) continue;
+            float dx = o.X - b.X, dy = o.Y - b.Y, rr = o.R + b.R;
+            if (dx * dx + dy * dy > rr * rr) continue;
+            var bottom = Base(o);
+            if (bottom.Pile != null)
+            {
+                float j = b.Vx * b.Mass;
+                bottom.Vx += j / StackMass(bottom) * 0.8f;
+                // hit low, the top lags behind; hit high (the head), the top is knocked over
+                Strike(bottom, MathF.Abs(j), o == bottom ? -MathF.Sign(b.Vx) : 2 * MathF.Sign(b.Vx));
+            }
+            Puff(b.X, b.Y, b.R, b.Vx * 0.2f);
+            return true;
+        }
+        if (HitsWindow(b.X, b.Y, px, py)) { Puff(b.X, b.Y, b.R, -b.Vx * 0.15f); return true; }
+        return false;
+    }
+
+    // Is a snowball touching a visitor's body?
+    static bool VisitorHit(Visitor v, Snowball b)
+    {
+        if (v.Hidden) return false;
+        float r = v.Kind == 0 ? 11 : v.Kind == 1 ? 12 : 9;
+        float cy = v.Y - v.Hop - (v.Kind == 0 ? 13 : v.Kind == 1 ? 11 : 9);
+        float dx = b.X - v.X, dy = b.Y - cy;
+        return dx * dx + dy * dy <= (r + b.R) * (r + b.R);
+    }
+
+    public int VisitorHits;          // how many times a visitor has been hit (reactions come next)
+    void HitVisitor(Visitor v, Snowball b) => VisitorHits++;
+
+    // A burst of powder flying out from a point
+    void Puff(float x, float y, float r, float vx)
+    {
+        for (int k = 0; k < Math.Min(24, (int)r + 6); k++)
+        {
+            float ang = Rnd.F(0, 6.28f), d = Rnd.F(0, r);
+            SpawnClump(x + MathF.Cos(ang) * d, y + MathF.Sin(ang) * d,
+                       vx + MathF.Cos(ang) * Rnd.F(60, 200), MathF.Sin(ang) * Rnd.F(60, 200) - 120, -3);
+        }
     }
 
     // A ball dropped just above another ball (that isn't already a full snowman) gets stacked on it
@@ -971,18 +1112,19 @@ sealed class SnowWorld
             if (b.Falling)
             {
                 b.Decor = 0;
-                float prevBottom = b.Y + b.R;
+                float prevBottom = b.Y + b.R, px = b.X, py = b.Y;
                 b.Vy += Cfg.Gravity * dt;
                 b.X += b.Vx * dt;
                 b.Y += b.Vy * dt;
                 b.Rot += b.Vx * dt / b.R;
                 Pile p;
-                if (b.Vy > 0 && (p = LandingSurface(b.X, prevBottom, b.Y + b.R, onEdge: true)) != null)
+                if (b.Thrown && ThrownHit(b, px, py)) gone = true;
+                else if (b.Vy > 0 && (p = LandingSurface(b.X, prevBottom, b.Y + b.R, onEdge: true)) != null)
                 {
-                    if (b.Vy < Cfg.SoftLanding) Land(b, p);   // set down gently (e.g. just clicked): it stays a ball
-                    else { Splat(b, p); gone = true; }        // a real fall bursts into a heap of snow
+                    if (b.Vy < Cfg.SoftLanding && !b.Thrown) Land(b, p);   // set down gently: it stays a ball
+                    else { Splat(b, p); gone = true; }        // a throw or a real fall bursts into a heap of snow
                 }
-                else if (b.Y > H + b.R * 2 || b.X < -100 || b.X > W + 100) gone = true;
+                else if (b.Y > H + b.R * 2 || b.X < -100 || b.X > W + 100 || (b.Thrown && t - b.ThrownAt > 8)) gone = true;
             }
             else if (b.Dragging)
             {
@@ -1146,12 +1288,7 @@ sealed class SnowWorld
         var surface = Base(b).Pile;
         b.Below = null;
         if (surface != null) Splat(b, surface);
-        for (int k = 0; k < Math.Min(24, (int)b.R + 6); k++)
-        {
-            float ang = Rnd.F(0, 6.28f), r = Rnd.F(0, b.R);
-            SpawnClump(b.X + MathF.Cos(ang) * r, b.Y + MathF.Sin(ang) * r,
-                       MathF.Cos(ang) * Rnd.F(60, 200), MathF.Sin(ang) * Rnd.F(60, 200) - 120, -3);
-        }
+        Puff(b.X, b.Y, b.R, 0);
         Balls.Remove(b);
         if (b == activeBall) activeBall = null;
         return true;
@@ -1742,7 +1879,13 @@ unsafe static class Render
         foreach (var b in drawBalls) Ball(buf, bw, bh, b, s, w.T);
         foreach (var c in w.Carrots) Carrot(buf, bw, bh, c, s, w.T);
         foreach (var f in w.Flakes) if (!f.Clump && f.Layer == 2) Flake(buf, bw, bh, f, s, w.T);
-        if (w.DragBall != null) Ball(buf, bw, bh, w.DragBall, s, w.T);
+        if (w.DragBall != null)
+        {
+            for (int i = 0; i < w.PathCount; i++)      // dotted guide of where a throw would go
+                Circle(buf, bw, bh, w.Path[2 * i] * s, w.Path[2 * i + 1] * s, 1.6f * s,
+                       0.5f * (1 - (float)i / (w.Path.Length / 2)), 0.85f, 0.92f, 1);
+            Ball(buf, bw, bh, w.DragBall, s, w.T);
+        }
     }
 
     static readonly List<Snowball> drawBalls = new();
@@ -1880,6 +2023,7 @@ static unsafe class Program
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] static extern bool PostMessageW(IntPtr hWnd, uint msg, IntPtr w, IntPtr l);
     [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT pt);
+    [DllImport("user32.dll")] static extern short GetKeyState(int key);
     [DllImport("user32.dll")] static extern IntPtr CreateIconIndirect(ref ICONINFO info);
     [DllImport("user32.dll")] static extern IntPtr LoadCursorW(IntPtr inst, IntPtr name);
     [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr hdc);
@@ -2023,6 +2167,7 @@ static unsafe class Program
 
         GetCursorPos(out POINT m);
         world.MouseX = m.X / scale;
+        world.AimKey = (GetKeyState(0x10) & 0x8000) != 0;   // Shift: slingshot aiming
         world.MouseY = m.Y / scale;
         world.Update(dt, ReadWindows, ReadTaskbarTop);
         UpdateMouseCapture();
@@ -2226,6 +2371,7 @@ static unsafe class Program
             "⚪  Roll a snowball: slide your mouse sideways over snow\n" +
             "🎳  Push it: roll one snowball into another\n" +
             "🖐️  Carry it: hold the left mouse button on a snowball and drag\n" +
+            "🎯  Throw it: carry it and flick the mouse (or hold Shift, pull back and let go)\n" +
             "💥  Break it: right-click a snowball\n" +
             "⛄  Build a snowman: stack three snowballs\n" +
             "🪟  Make snow fly: drag a window\n" +

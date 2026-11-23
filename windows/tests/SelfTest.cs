@@ -67,6 +67,7 @@ static unsafe class SelfTest
         Clicks();
         Weather();
         Visitors();
+        Throwing();
         Console.WriteLine(fails == 0 ? "\nAll checks passed." : $"\n{fails} check(s) failed.");
         Environment.Exit(fails == 0 ? 0 : 1);
     }
@@ -512,6 +513,98 @@ static unsafe class SelfTest
         crc ^= b;
         for (int k = 0; k < 8; k++) crc = (crc & 1) != 0 ? 0xEDB88320 ^ (crc >> 1) : crc >> 1;
         return crc;
+    }
+
+    // Pick a ball up and flick it: dx, dy per frame for a few frames, then let go
+    static float Flick(SnowWorld w, Snowball b, float dx, float dy, out int path)
+    {
+        w.MouseX = b.X; w.MouseY = b.Y - 40;
+        b.Y -= 40;                                  // lifted a little above the snow first
+        w.MouseY = b.Y;
+        w.BeginDrag(w.MouseX, w.MouseY);
+        path = 0;
+        for (int i = 0; i < 8; i++) { w.MouseX += dx; w.MouseY += dy; Step(w, 1); path = Math.Max(path, w.PathCount); }
+        float x = b.X;
+        w.EndDrag();
+        w.MouseX = w.MouseY = -999;
+        return x;
+    }
+
+    static void Throwing()
+    {
+        {
+            var w = Bare(out var p);
+            var b = w.AddBall(p, 500, 8);
+            float from = Flick(w, b, 12, -4, out int path);    // ~700 px/s to the right, a little up
+            Check(b.Thrown && b.Vx > 400, $"a fast flick throws the snowball ({b.Vx:0} px/s)");
+            Check(path > 5, $"a dotted path shows where it will fly while flicking ({path} dots)");
+            float far = b.X;
+            int clumps = 0;
+            for (int i = 0; i < 240 && w.Balls.Contains(b); i++) { Step(w, 1); far = MathF.Max(far, b.X); }
+            Step(w, 1);
+            clumps = Clumps(w);
+            Check(!w.Balls.Contains(b) && far - from > 150 && clumps > 0, $"it flies {far - from:0} px and bursts into powder where it lands");
+        }
+        {
+            float Speed(float r) { var w = Bare(out var p); var b = w.AddBall(p, 500, r); Flick(w, b, 20, -6, out _); return b.Vx; }
+            float small = Speed(8), big = Speed(26);
+            Check(big < small * 0.6f, $"a bigger snowball needs more force: same flick, {big:0} vs {small:0} px/s");
+        }
+        {
+            var w = Bare(out var p);
+            var b = w.AddBall(p, 500, 8);
+            float x0 = b.X, y0 = b.Y - 40;
+            w.AimKey = true;
+            w.MouseX = b.X; w.MouseY = b.Y - 40; b.Y -= 40;
+            w.BeginDrag(w.MouseX, w.MouseY);
+            for (int i = 0; i < 10; i++) { w.MouseX -= 8; w.MouseY += 5; Step(w, 1); }   // pull back down-left
+            bool stayed = MathF.Abs(b.X - x0) < 0.01f && MathF.Abs(b.Y - y0) < 0.01f;
+            int path = w.PathCount;
+            w.EndDrag();
+            w.AimKey = false;
+            Check(stayed && path > 5, "Shift-aiming: the ball stays put while you pull back, with a dotted guide");
+            Check(b.Thrown && b.Vx > 0 && b.Vy < 0, $"letting go launches it the other way, like a slingshot ({b.Vx:0}, {b.Vy:0})");
+        }
+        {
+            var w = Bare(out var p);
+            var b = w.AddBall(w.Ground, 100, 8);
+            b.Y = 600;
+            float clumps = Clumps(w);
+            w.Throw(b, 900, -50);
+            float far = 0;
+            for (int i = 0; i < 60 && w.Balls.Contains(b); i++) { Step(w, 1); far = MathF.Max(far, b.X); }
+            Check(!w.Balls.Contains(b) && far < 230 && Clumps(w) > clumps, $"a snowball thrown at a window splats against its side (stopped at x {far:0})");
+        }
+        {
+            var w = Bare(out var p);
+            var (bottom, mid, head) = Snowman(w, p);
+            var b = w.AddBall(p, 400, 8);
+            b.Y = head.Y;
+            w.Throw(b, 900, -30);
+            float lean = 0;
+            for (int i = 0; i < 120; i++) { Step(w, 1); lean = MathF.Max(lean, MathF.Abs(bottom.Wobble)); }
+            Check(!w.Balls.Contains(b) && (lean > 0.05f || head.Below == null), $"a snowball thrown at a snowman's head rocks it (lean {lean:0.00}) or knocks it over");
+        }
+        {
+            var w = Bare(out var p);
+            var b = w.AddBall(w.Ground, 60, 8);
+            b.Y = 300;
+            w.Throw(b, -1500, -600);
+            Step(w, 180);
+            Check(!w.Balls.Contains(b), "a snowball thrown off the screen doesn't fly on forever");
+        }
+        {
+            var w = Bare(out var p);
+            w.Invite(1);
+            w.Visitor.X = 1700;
+            Step(w, 1, new List<Win>());
+            var b = w.AddBall(w.Ground, 1550, 7);
+            b.Y = w.Visitor.Y - 12;
+            w.Throw(b, 700, -80);
+            float far = 0;
+            for (int i = 0; i < 40 && w.Balls.Contains(b); i++) { Step(w, 1, new List<Win>()); far = MathF.Max(far, b.X); }
+            Check(w.VisitorHits == 1 && far < w.Visitor.X + 15, "a thrown snowball hits a visitor (and bursts there)");
+        }
     }
 
     static string Snapshot(SnowWorld w)
