@@ -68,6 +68,7 @@ static unsafe class SelfTest
         Weather();
         Visitors();
         Throwing();
+        Personalities();
         Console.WriteLine(fails == 0 ? "\nAll checks passed." : $"\n{fails} check(s) failed.");
         Environment.Exit(fails == 0 ? 0 : 1);
     }
@@ -603,7 +604,162 @@ static unsafe class SelfTest
             w.Throw(b, 700, -80);
             float far = 0;
             for (int i = 0; i < 40 && w.Balls.Contains(b); i++) { Step(w, 1, new List<Win>()); far = MathF.Max(far, b.X); }
-            Check(w.VisitorHits == 1 && far < w.Visitor.X + 15, "a thrown snowball hits a visitor (and bursts there)");
+            Check(w.VisitorHits >= 1 && far < w.Visitor.X + 15, "a thrown snowball hits a visitor (and bursts there)");
+        }
+    }
+
+    static readonly List<Win> Open = new();          // an empty desktop: visitors in plain view
+
+    // A visitor standing at x, and a snowball thrown at it from the left
+    static (SnowWorld, Visitor) Target(int kind, float x)
+    {
+        var w = Bare(out _);
+        FillSnow(w.Ground);
+        w.Invite(kind);
+        var v = w.Visitor;
+        v.X = x; v.Dir = 1; v.NextHabit = 1e9f;
+        Step(w, 1, Open);
+        return (w, v);
+    }
+
+    static void ThrowAt(SnowWorld w, Visitor v)
+    {
+        var b = w.AddBall(w.Ground, v.X - 150, 7);
+        b.Y = v.Y - 14;
+        w.Throw(b, 750, -90);
+    }
+
+    static void Personalities()
+    {
+        {
+            var (w, v) = Target(0, 900);
+            ThrowAt(w, v);
+            float x0 = v.X;
+            bool tumbled = false, lay = false, sat = false;
+            int frames = 0;
+            while (frames < 60 * 8 && !(tumbled && v.Act == 0)) { Step(w, 1, Open); frames++; tumbled |= v.Act == VisitorAct.Tumble; lay |= v.Pose == 1; sat |= v.Pose == 2; }
+            Check(tumbled && lay && sat, "penguin hit by a snowball: loses its balance, slides on its belly, sits up and shakes");
+            Check(MathF.Abs(v.X - x0) > 15, $"the penguin slides with the hit ({v.X - x0:0} px)");
+            Check(v.Act == 0 && w.Visitor == v, $"the penguin always gets back up ({frames / 60f:0.0} s)");
+        }
+        {
+            var (w, v) = Target(0, 900);
+            ThrowAt(w, v);
+            Step(w, 30, Open);
+            float tBefore = v.ActT;
+            ThrowAt(w, v);
+            Step(w, 20, Open);
+            Check(w.VisitorHits == 2 && v.Act == VisitorAct.Tumble && v.ActT > tBefore, "a second hit mid-reaction doesn't restart it");
+        }
+        {
+            int fights = 0;
+            for (int seed = 0; seed < 12; seed++)
+            {
+                var (w, v) = Target(0, 900);
+                Rnd.Seed(100 + seed);                   // after Target, which seeds its own world
+                ThrowAt(w, v);
+                bool threw = false;
+                for (int i = 0; i < 60 * 5 && !threw; i++) { Step(w, 1, Open); foreach (var b in w.Balls) if (b.ThrownBy == v && b.Vx < 0) threw = true; }
+                if (threw) fights++;
+            }
+            Check(fights >= 1 && fights < 12, $"sometimes the penguin throws a snowball back ({fights} of 12 times), toward the thrower");
+        }
+        {
+            var (w, v) = Target(1, 900);
+            float dir0 = v.Dir, x0 = v.X, hop = 0;
+            ThrowAt(w, v);
+            bool leapt = false, looked = false;
+            for (int i = 0; i < 60 * 3; i++)
+            {
+                Step(w, 1, Open);
+                leapt |= v.Act == VisitorAct.Leap;
+                hop = MathF.Max(hop, v.Hop);
+                if (v.Act == VisitorAct.Leap && v.ActT > 1.1f) looked |= v.Face == MathF.Sign(v.FromX - v.X);
+            }
+            Check(leapt && hop > 10, $"snow fox hit: jumps aside ({hop:0} px high)");
+            Check(looked, "the fox shakes off the snow and looks back toward the thrower");
+            Check(v.Act == 0 && v.Dir == dir0 && v.X > x0, "then it goes back to wandering");
+        }
+        {
+            var (w, v) = Target(2, 900);
+            ThrowAt(w, v);
+            bool startled = false, away = false, back = false;
+            for (int i = 0; i < 60 * 25 && !back; i++)
+            {
+                Step(w, 1, Open);
+                startled |= v.Act == VisitorAct.Startle;
+                if (v.Away) away = true;
+                if (away && !v.Away && !v.Hidden) back = true;
+            }
+            Check(startled && away, "rabbit hit: a startled hop, then it runs off to hide");
+            Check(back && w.Visitor == v, "the rabbit comes back after a short while");
+        }
+        {
+            var (w, v) = Target(1, 600);
+            var ball = w.AddBall(w.Ground, 700, 8);
+            float hopAtBall = 0;
+            for (int i = 0; i < 120; i++) { Step(w, 1, Open); if (MathF.Abs(v.X - ball.X) < 4) hopAtBall = MathF.Max(hopAtBall, v.Hop); }
+            Check(hopAtBall > ball.R, $"the fox jumps over a small snowball in its way ({hopAtBall:0} px over a {ball.R * 2:0} px ball)");
+        }
+        {
+            var (w, v) = Target(1, 600);
+            var ball = w.AddBall(w.Ground, 800, 8);
+            ball.Vx = 160;
+            bool chased = false, batted = false;
+            float lastV = ball.Vx;
+            for (int i = 0; i < 60 * 5; i++)
+            {
+                Step(w, 1, Open);
+                chased |= v.Act == VisitorAct.Chase;
+                if (ball.Vx > lastV + 40) batted = true;
+                lastV = ball.Vx;
+            }
+            Check(chased && batted, "the fox chases a rolling snowball and bats it along");
+        }
+        {
+            var (w, v) = Target(0, 600);
+            var ball = w.AddBall(w.Ground, 640, 8);
+            for (int i = 0; i < 60 * 3 && ball.Vx <= 0; i++) Step(w, 1, Open);
+            Check(ball.Vx > 0, "the penguin plays with a snowball: gives it a kick");
+        }
+        {
+            Rnd.Seed(5);
+            var w = Bare(out _);
+            bool slipped = false, sat = false;
+            for (int i = 0; i < 60 * 240; i++)
+            {
+                if (w.Visitor == null) w.Invite(0);
+                Step(w, 1, Open);
+                slipped |= w.Visitor?.Act == VisitorAct.Slip;
+                sat |= w.Visitor?.Act == VisitorAct.Sit;
+            }
+            Check(slipped && sat, "left alone, the penguin sometimes slips and sometimes sits down");
+        }
+        {
+            var (w, v) = Target(2, 900);
+            for (int i = 0; i < 120; i++) Step(w, 1, Open);
+            int small = 0, big = 0;
+            foreach (var m in w.Marks) if (m.Pile == w.Ground) { if (m.Size == 2) small++; else if (m.Size > 3) big++; }
+            Check(small > 0 && big > 0, "the rabbit leaves its own tracks: long hind prints and small front prints");
+        }
+        {
+            // Every pose drawn: still no allocation per frame
+            const int bw = 1920, bh = 1080;
+            var buf = new uint[bw * bh];
+            long alloc = 0;
+            fixed (uint* px = buf)
+                for (int pose = 0; pose < 4; pose++)
+                {
+                    var (w, v) = Target(0, 900);
+                    Step(w, 2, Open);
+                    v.Pose = pose;
+                    Render.World(px, bw, bh, w, 1);
+                    long before = GC.GetAllocatedBytesForCurrentThread();
+                    for (int i = 0; i < 10; i++) { v.Pose = pose; Render.World(px, bw, bh, w, 1); }
+                    alloc += GC.GetAllocatedBytesForCurrentThread() - before;
+                    Png(buf, bw, bh, 860, 990, 80, 90, $"penguin-pose{pose}.png");
+                }
+            Check(alloc == 0, $"drawing the penguin's poses allocates nothing ({alloc} bytes)");
         }
     }
 

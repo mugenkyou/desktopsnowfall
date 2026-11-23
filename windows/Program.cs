@@ -221,7 +221,25 @@ sealed class Visitor
     public float X, Y, Dir, Hop, Anim, PauseLeft, StepAcc, HopT = -1;
     public bool Hidden, TurnedBack;
     public int Foot;
-    public bool Walking => PauseLeft <= 0;
+    public int Act;                  // what it's busy with besides wandering (VisitorAct), 0 = nothing
+    public float ActT, ActLen;       // time into the act, and how long it lasts
+    public float PushDir = 1;        // which way the snowball that hit it was flying
+    public float FromX, FromY;       // where that snowball was thrown from
+    public float SlideV, JumpH, Cool, Hurry, NextHabit = 10, AwayUntil;
+    public bool Away;                // the rabbit is hiding off-screen
+    public Snowball Target;          // the ball the fox is chasing
+    // drawing: which way it faces, a shake offset, and its pose (0 standing, 1 on its belly, 2 sitting, 3 flipper up)
+    public float Face = 1, Jitter;
+    public int Pose;
+    public bool Walking => PauseLeft <= 0 && Act == 0;
+    public bool Reacting => Act is VisitorAct.Tumble or VisitorAct.Leap or VisitorAct.Startle or VisitorAct.Flee or VisitorAct.ThrowBack;
+}
+
+static class VisitorAct
+{
+    public const int Tumble = 1, Slip = 2, Sit = 3, Kick = 4, ThrowBack = 5,   // penguin
+                     Leap = 6, JumpOver = 7, Chase = 8,                       // snow fox
+                     Startle = 9, Flee = 10;                                 // rabbit
 }
 
 // A snowman's nose after a good knock: it tumbles down, lies in the snow for a while, then fades
@@ -775,8 +793,6 @@ sealed class SnowWorld
         return dx * dx + dy * dy <= (r + b.R) * (r + b.R);
     }
 
-    public int VisitorHits;          // how many times a visitor has been hit (reactions come next)
-    void HitVisitor(Visitor v, Snowball b) => VisitorHits++;
 
     // A burst of powder flying out from a point
     void Puff(float x, float y, float r, float vx)
@@ -989,6 +1005,7 @@ sealed class SnowWorld
 
     public Visitor Visitor;
     float visitAt = Cfg.FirstVisit;
+    public int VisitorHits;          // snowballs that have hit a visitor
 
     // Send in a visitor now (kind -1: any enabled one). Only one at a time.
     public bool Invite(int kind = -1)
@@ -1004,7 +1021,7 @@ sealed class SnowWorld
         }
         else if (!Cfg.Visitors[kind]) return false;
         bool fromLeft = Rnd.F(0, 1) < 0.5f;
-        Visitor = new Visitor { Kind = kind, Dir = fromLeft ? 1 : -1, X = fromLeft ? -30 : W + 30 };
+        Visitor = new Visitor { Kind = kind, Dir = fromLeft ? 1 : -1, X = fromLeft ? -30 : W + 30, NextHabit = t + Rnd.F(6, 14) };
         return true;
     }
 
@@ -1020,45 +1037,24 @@ sealed class SnowWorld
         var v = Visitor;
         if (!Cfg.Visitors[v.Kind]) { SendAway(); return; }
         v.Anim += dt;
-        float moved = 0;
-        if (v.PauseLeft > 0) v.PauseLeft -= dt;
-        else if (v.Kind == 2)
+        v.Cool -= dt;
+        v.Hurry -= dt;
+        v.Jitter = 0;
+        v.Pose = 0;
+        v.Face = v.Dir;
+        if (v.Away)
         {
-            // The rabbit hops: a short arc, a pair of prints where it lands, a little rest
-            if (v.HopT < 0) v.HopT = 0;
-            v.HopT += dt / 0.42f;
-            if (v.HopT >= 1)
-            {
-                v.HopT = -1;
-                v.Hop = 0;
-                Footprint(v.X - 2.5f, 3.2f);
-                Footprint(v.X + 2.5f, 3.2f);
-                v.PauseLeft = Rnd.F(0, 1) < 0.12f ? Rnd.F(1.5f, 3.5f) : Rnd.F(0.12f, 0.5f);
-            }
-            else
-            {
-                moved = v.Dir * 75 * dt;
-                v.Hop = MathF.Sin(MathF.PI * v.HopT) * 11;
-            }
+            // The rabbit peeks back in from the side it ran off to, once it feels safe
+            if (t < v.AwayUntil) { v.Hidden = true; return; }
+            v.Away = false;
+            v.Dir = v.Face = v.X < 0 ? 1 : -1;
+            v.Cool = 2;
         }
-        else
-        {
-            // The penguin waddles slowly, the fox trots; both leave a line of alternating prints
-            moved = v.Dir * (v.Kind == 0 ? 32 : 85) * dt;
-            v.StepAcc += MathF.Abs(moved);
-            if (v.StepAcc >= (v.Kind == 0 ? 7 : 12))
-            {
-                v.StepAcc = 0;
-                v.Foot ^= 1;
-                Footprint(v.X + (v.Foot == 0 ? -1.5f : 1.5f), v.Kind == 0 ? 4 : 3);
-            }
-            if (Rnd.F(0, 1) < dt * 0.12f) v.PauseLeft = Rnd.F(1, 3);   // stops to look around now and then
-        }
+        float moved = v.Act != 0 ? StepAct(v, dt) : Wander(v, dt);
         v.X += moved;
-        // Sometimes it changes its mind halfway (once)
-        if (!v.TurnedBack && v.Walking && v.X > W * 0.25f && v.X < W * 0.75f && Rnd.F(0, 1) < dt * 0.02f)
+        if (v.Act == 0 && !v.TurnedBack && v.Walking && v.X > W * 0.25f && v.X < W * 0.75f && Rnd.F(0, 1) < dt * 0.02f)
         {
-            v.Dir = -v.Dir;
+            v.Dir = -v.Dir;                  // sometimes it changes its mind halfway (once)
             v.TurnedBack = true;
         }
         int c = Ground.Col(v.X);
@@ -1067,7 +1063,273 @@ sealed class SnowWorld
         v.Hidden = false;
         foreach (var w in Order)
             if (w.Contains(v.X, v.Y - 10) || w.Contains(v.X - 12, v.Y - 6) || w.Contains(v.X + 12, v.Y - 6)) { v.Hidden = true; break; }
-        if ((v.Dir > 0 && v.X > W + 40) || (v.Dir < 0 && v.X < -40)) SendAway();
+        bool off = v.X < -40 || v.X > W + 40;
+        if (off && v.Act == VisitorAct.Flee)
+        {
+            v.Away = true;                   // hides for a little while, then comes back
+            v.AwayUntil = t + Rnd.F(5, 9);
+            v.Act = 0;
+            v.Hop = 0;
+            v.HopT = -1;
+            v.X = v.X < 0 ? -30 : W + 30;
+        }
+        else if ((v.Dir > 0 && v.X > W + 40) || (v.Dir < 0 && v.X < -40)) SendAway();
+    }
+
+    // Ordinary wandering, with each animal's own habits
+    float Wander(Visitor v, float dt)
+    {
+        float moved = 0;
+        if (v.PauseLeft > 0)
+        {
+            v.PauseLeft -= dt;
+            // while standing still the fox and the rabbit look around (back over their shoulder for a moment)
+            if (v.Kind != 0 && MathF.Sin(v.Anim * 1.7f) > 0.6f) v.Face = -v.Dir;
+            return 0;
+        }
+        if (v.Kind == 2)
+        {
+            if (Hops(v, dt, 75, 11, 0.42f, out moved))
+                v.PauseLeft = Rnd.F(0, 1) < 0.12f ? Rnd.F(1.5f, 3.5f) : Rnd.F(0.12f, 0.5f);
+            if (RollingToward(v, 50, 150) != null) Startle(v, v.Dir * -1, v.X - v.Dir * 100, v.Y - 20);
+            return moved;
+        }
+        float speed = (v.Kind == 0 ? 32 : 85) * (v.Hurry > 0 ? 1.7f : 1);
+        moved = v.Dir * speed * dt;
+        Prints(v, moved);
+        if (Rnd.F(0, 1) < dt * 0.12f) v.PauseLeft = Rnd.F(1, 3);   // stops to look around now and then
+
+        if (v.Kind == 0)
+        {
+            // Penguin: now and then slips or sits down for a rest; gives a small snowball ahead a kick
+            if (t >= v.NextHabit)
+            {
+                v.NextHabit = t + Rnd.F(8, 18);
+                float r = Rnd.F(0, 1);
+                if (r < 0.4f) Begin(v, VisitorAct.Slip, 1.5f, v.SlideV = 60);
+                else if (r < 0.8f) Begin(v, VisitorAct.Sit, Rnd.F(2.5f, 5));
+            }
+            var ball = GroundBallAhead(v, 16, 4);
+            if (ball != null && ball.R < 16 && v.Cool <= 0)
+            {
+                ball.Vx += v.Dir * Rnd.F(70, 120);
+                Begin(v, VisitorAct.Kick, 0.6f);
+                v.Cool = 3;
+            }
+        }
+        else
+        {
+            // Snow fox: hops over a small snowball in its way, turns back from a big one, chases a rolling one
+            var ball = GroundBallAhead(v, 26, 0);
+            if (ball != null && ball.R < 14) { v.JumpH = ball.R * 2 + 8; Begin(v, VisitorAct.JumpOver, 0.55f); }
+            else if (ball != null && MathF.Abs(ball.X - v.X) < ball.R + 14) v.Dir = -v.Dir;
+            else if (v.Cool <= 0 && (v.Target = RollingNear(v, 300, 40)) != null) Begin(v, VisitorAct.Chase, 5);
+        }
+        return moved;
+    }
+
+    void Begin(Visitor v, int act, float len, float _ = 0)
+    {
+        v.Act = act;
+        v.ActT = 0;
+        v.ActLen = len;
+        v.PauseLeft = 0;
+    }
+
+    // One hop at a time: returns true when it lands (and leaves the rabbit's prints)
+    bool Hops(Visitor v, float dt, float speed, float height, float time, out float moved)
+    {
+        moved = 0;
+        if (v.HopT < 0) v.HopT = 0;
+        v.HopT += dt / time;
+        if (v.HopT >= 1)
+        {
+            v.HopT = -1;
+            v.Hop = 0;
+            // the rabbit's own track: two long hind prints side by side, two small front prints in front
+            Footprint(v.X - 2.5f, 3.2f);
+            Footprint(v.X + 2.5f, 3.2f);
+            Footprint(v.X + v.Dir * 5.5f, 2);
+            Footprint(v.X + v.Dir * 8.5f, 2);
+            return true;
+        }
+        moved = v.Dir * speed * dt;
+        v.Hop = MathF.Sin(MathF.PI * v.HopT) * height;
+        return false;
+    }
+
+    void Prints(Visitor v, float moved)
+    {
+        v.StepAcc += MathF.Abs(moved);
+        if (v.StepAcc < (v.Kind == 0 ? 7 : 12)) return;
+        v.StepAcc = 0;
+        v.Foot ^= 1;
+        Footprint(v.X + (v.Foot == 0 ? -1.5f : 1.5f), v.Kind == 0 ? 4 : 3);
+    }
+
+    // A resting snowball on the ground just ahead of the visitor
+    Snowball GroundBallAhead(Visitor v, float reach, float minAhead)
+    {
+        foreach (var b in Balls)
+        {
+            if (b.Pile != Ground || !OnSurface(b) || b.Hidden) continue;
+            float ahead = (b.X - v.X) * v.Dir;
+            if (ahead >= minAhead && ahead <= b.R + reach) return b;
+        }
+        return null;
+    }
+
+    // A snowball rolling along the ground near the visitor (faster than minSpeed)
+    Snowball RollingNear(Visitor v, float range, float minSpeed)
+    {
+        foreach (var b in Balls)
+            if (b.Pile == Ground && OnSurface(b) && MathF.Abs(b.Vx) > minSpeed && MathF.Abs(b.X - v.X) < range) return b;
+        return null;
+    }
+
+    // ...and one rolling straight at it
+    Snowball RollingToward(Visitor v, float range, float minSpeed)
+    {
+        var b = RollingNear(v, range, minSpeed);
+        return b != null && (v.X - b.X) * b.Vx > 0 ? b : null;
+    }
+
+    // Hit by a snowball: each animal reacts its own way (once; a second hit mid-reaction just bursts)
+    void HitVisitor(Visitor v, Snowball b)
+    {
+        VisitorHits++;
+        if (v.Reacting || v.Cool > 0) return;
+        float dir = b.Vx != 0 ? MathF.Sign(b.Vx) : MathF.Sign(v.X - b.FromX);
+        if (v.Kind == 0) { Begin(v, VisitorAct.Tumble, 2.6f); v.SlideV = 110; }
+        else if (v.Kind == 1) Begin(v, VisitorAct.Leap, 1.9f);
+        if (v.Kind != 2) { v.PushDir = dir; v.FromX = b.FromX; v.FromY = b.FromY; v.HopT = -1; v.Hop = 0; }
+        else Startle(v, dir, b.FromX, b.FromY);
+    }
+
+    void Startle(Visitor v, float dir, float fromX, float fromY)
+    {
+        v.PushDir = dir;
+        v.FromX = fromX; v.FromY = fromY;
+        v.HopT = -1;
+        Begin(v, VisitorAct.Startle, 0.5f);
+    }
+
+    float StepAct(Visitor v, float dt)
+    {
+        v.ActT += dt;
+        float T = v.ActT, moved = 0;
+        bool done = T >= v.ActLen;
+        switch (v.Act)
+        {
+            case VisitorAct.Tumble:          // penguin: wobbles, slides on its belly, shakes itself, gets back up
+                if (T < 0.35f) { v.Jitter = MathF.Sin(T * 40) * 2.5f; moved = v.PushDir * 30 * dt; }
+                else if (T < 1.3f) { v.Pose = 1; v.Face = v.PushDir; moved = Slide(v, dt); }
+                else if (T < 2.2f)
+                {
+                    v.Pose = 2;
+                    v.Jitter = MathF.Sin(T * 55) * 1.6f;
+                    if (T - dt < 1.3f) Shake(v);
+                }
+                else v.Hop = MathF.Sin(MathF.PI * Math.Clamp((T - 2.2f) / 0.4f, 0, 1)) * 3;
+                if (done)
+                {
+                    v.Hop = 0;
+                    float r = Rnd.F(0, 1);
+                    if (r < 0.35f) { Begin(v, VisitorAct.ThrowBack, 0.9f); return moved; }   // snowball fight!
+                    if (r < 0.65f) { v.Dir = v.PushDir; v.Hurry = 4; }                       // waddles off, a bit quicker
+                }
+                break;
+            case VisitorAct.Slip:            // penguin: a little slip on the ice, a short belly slide, back up
+                if (T < 0.3f) v.Jitter = MathF.Sin(T * 40) * 2;
+                else if (T < 0.9f) { v.Pose = 1; moved = Slide(v, dt); }
+                else v.Hop = MathF.Sin(MathF.PI * Math.Clamp((T - 0.9f) / 0.4f, 0, 1)) * 2;
+                break;
+            case VisitorAct.Sit:
+                v.Pose = 2;
+                break;
+            case VisitorAct.Kick:
+                v.Jitter = MathF.Sin(T * 30) * 0.8f;
+                break;
+            case VisitorAct.ThrowBack:       // penguin: turns to where the snowball came from and throws one back
+                v.Face = MathF.Sign(v.FromX - v.X);
+                v.Pose = 3;
+                if (T >= 0.45f && T - dt < 0.45f) ThrowBackAt(v);
+                break;
+            case VisitorAct.Leap:            // fox: springs aside, shakes the snow off, looks where it came from
+                if (T < 0.45f) { v.Hop = MathF.Sin(MathF.PI * T / 0.45f) * 16; moved = v.PushDir * 120 * dt; }
+                else if (T < 1.05f)
+                {
+                    v.Hop = 0;
+                    v.Jitter = MathF.Sin(T * 60) * 1.5f;
+                    if (T - dt < 0.45f) Shake(v);
+                }
+                else v.Face = MathF.Sign(v.FromX - v.X);
+                break;
+            case VisitorAct.JumpOver:        // fox: an arc high enough to clear the snowball
+                v.Hop = MathF.Sin(MathF.PI * Math.Min(1, T / v.ActLen)) * v.JumpH;
+                moved = v.Dir * 110 * dt;
+                break;
+            case VisitorAct.Chase:           // fox: dashes after a rolling snowball and bats it along
+            {
+                var b = v.Target;
+                if (b == null || !Balls.Contains(b) || b.Pile != Ground || !OnSurface(b)) { done = true; break; }   // keeps after it even once it slows
+                v.Dir = v.Face = MathF.Sign(b.X - v.X);
+                moved = v.Dir * 140 * dt;
+                Prints(v, moved);
+                if (MathF.Abs(b.X - v.X) < b.R + 12)
+                {
+                    b.Vx += v.Dir * Rnd.F(80, 150);
+                    v.JumpH = 6;
+                    Begin(v, VisitorAct.JumpOver, 0.35f);
+                    v.Cool = 6;
+                    return moved;
+                }
+                break;
+            }
+            case VisitorAct.Startle:         // rabbit: one big startled hop away...
+                v.Dir = v.Face = v.PushDir;
+                v.Hop = MathF.Sin(MathF.PI * Math.Min(1, T / v.ActLen)) * 20;
+                moved = v.PushDir * 170 * dt;
+                if (done) { v.Hop = 0; Begin(v, VisitorAct.Flee, 30); return moved; }
+                break;
+            case VisitorAct.Flee:            // ...then hops off quickly to hide (it comes back later)
+                Hops(v, dt, 170, 13, 0.32f, out moved);
+                break;
+        }
+        if (done)
+        {
+            if (v.Act is VisitorAct.Tumble or VisitorAct.Leap or VisitorAct.ThrowBack) v.Cool = 1;
+            if (v.Act == VisitorAct.Chase) v.Cool = 6;
+            v.Act = 0;
+            v.Hop = 0;
+        }
+        return moved;
+    }
+
+    float Slide(Visitor v, float dt)
+    {
+        v.SlideV *= MathF.Exp(-2.2f * dt);
+        float moved = v.Face * v.SlideV * dt;
+        v.StepAcc += MathF.Abs(moved);
+        if (v.StepAcc >= 6) { v.StepAcc = 0; if (Ground.Col(v.X) >= 0) AddMark(Ground, v.X, 9, 0.35f, 7); }   // a belly track
+        return moved;
+    }
+
+    void Shake(Visitor v)
+    {
+        for (int k = 0; k < 10; k++)
+            SpawnClump(v.X + Rnd.F(-10, 10), v.Y - Rnd.F(6, 22), Rnd.F(-110, 110), -Rnd.F(40, 140), -3);
+    }
+
+    // The penguin's snowball fight: a small ball lobbed back to where the one that hit it came from
+    void ThrowBackAt(Visitor v)
+    {
+        var b = new Snowball { R = 5, X = v.X + v.Face * 8, Y = v.Y - 24 };
+        float dx = v.FromX - b.X, dy = v.FromY - b.Y;
+        float time = Math.Clamp(MathF.Abs(dx) / 500, 0.5f, 1.4f);
+        Balls.Add(b);
+        Throw(b, dx / time, (dy - 0.5f * Cfg.Gravity * time * time) / time, v);
+        TrimBalls();
     }
 
     void Footprint(float x, float size)
@@ -1712,7 +1974,7 @@ unsafe static class Render
     static void Visitor(uint* buf, int bw, int bh, Visitor v, float s)
     {
         if (v.Hidden) return;
-        var p = new Pen { Buf = buf, Bw = bw, Bh = bh, S = s, X0 = v.X, Y0 = v.Y - v.Hop, D = v.Dir };
+        var p = new Pen { Buf = buf, Bw = bw, Bh = bh, S = s, X0 = v.X + v.Jitter, Y0 = v.Y - v.Hop, D = v.Face };
         if (v.Kind == 0) Penguin(p, v);
         else if (v.Kind == 1) Fox(p, v);
         else Rabbit(p, v);
@@ -1720,6 +1982,34 @@ unsafe static class Render
 
     static void Penguin(Pen p, Visitor v)
     {
+        const float dr = 0.12f, dg = 0.13f, db = 0.18f;
+        if (v.Pose == 1)
+        {
+            // on its belly, sliding head first
+            p.Ell(-12, -3, 3, 1.2f, 0.98f, 0.55f, 0.15f);                     // feet trailing
+            p.Ell(0, -6, 12, 6.5f, dr, dg, db);                               // body
+            p.Ell(1, -3.8f, 9.5f, 3.2f, 0.97f, 0.97f, 1);                     // white belly underneath
+            p.Ell(-2, -9.5f, 5.5f, 1.8f, 0.08f, 0.08f, 0.12f);                // flipper out to the side
+            p.Cir(12, -7, 5.5f, dr, dg, db);                                  // head
+            p.Cir(13.8f, -6.6f, 3, 0.97f, 0.97f, 1);
+            p.Cir(14.5f, -7.6f, 0.9f, 0.05f, 0.05f, 0.08f);
+            p.Tri(16.6f, -7.4f, 20.2f, -6.2f, 16.6f, -5, 0.98f, 0.6f, 0.15f);
+            return;
+        }
+        if (v.Pose == 2)
+        {
+            // sitting in the snow, feet out in front
+            p.Ell(6, -1.2f, 3.4f, 1.4f, 0.98f, 0.55f, 0.15f);
+            p.Ell(0, -9, 9, 9, dr, dg, db);
+            p.Ell(-6, -9, 2.2f, 5.5f, 0.08f, 0.08f, 0.12f);
+            p.Ell(1.8f, -8, 6, 7, 0.97f, 0.97f, 1);
+            p.Cir(0.8f, -19, 6, dr, dg, db);
+            p.Cir(2.9f, -19, 3.4f, 0.97f, 0.97f, 1);
+            p.Cir(3.7f, -19.9f, 1, 0.05f, 0.05f, 0.08f);
+            p.Tri(5.9f, -19.7f, 9.8f, -18.3f, 5.9f, -16.9f, 0.98f, 0.6f, 0.15f);
+            return;
+        }
+        if (v.Pose == 3) p.Seg(-3, -16, 4, -30, 3.2f, 0.08f, 0.08f, 0.12f);   // flipper raised to throw
         float k = v.Walking ? MathF.Sin(v.Anim * 9) : 0;
         float sway = k * 1.2f;                                         // waddle
         p.Ell(-3, -0.8f - MathF.Max(0, k) * 1.5f, 3.2f, 1.3f, 0.98f, 0.55f, 0.15f);   // feet, lifted in turn
@@ -1764,9 +2054,10 @@ unsafe static class Render
         p.Ell(0, -8, 8 + 2 * k, 7 - k, br, bg, bb);                      // body
         p.Ell(2, -5.5f, 5, 3.5f, 0.82f, 0.77f, 0.72f);                  // belly
         p.Ell(1.5f, -1.2f + k, 5.5f, 1.8f, br, bg, bb);                 // foot
-        p.Ell(5, -23 + k, 1.7f, 5.8f, br, bg, bb);                      // ears
-        p.Ell(7.8f, -22.3f + k, 1.7f, 5.8f, br, bg, bb);
-        p.Ell(7.8f, -22.3f + k, 0.7f, 4.2f, 0.92f, 0.7f, 0.72f);
+        float twitch = v.PauseLeft > 0 ? MathF.Max(0, MathF.Sin(v.Anim * 5)) * 0.8f : 0;   // ears twitch while it listens
+        p.Ell(5 - twitch, -23 + k, 1.7f, 5.8f, br, bg, bb);             // ears
+        p.Ell(7.8f + twitch, -22.3f + k, 1.7f, 5.8f, br, bg, bb);
+        p.Ell(7.8f + twitch, -22.3f + k, 0.7f, 4.2f, 0.92f, 0.7f, 0.72f);
         p.Cir(7, -14, 5, br, bg, bb);                                   // head
         p.Cir(9.2f, -15, 1, 0.08f, 0.08f, 0.1f);                        // eye
         p.Cir(11.8f, -13.5f, 0.9f, 0.92f, 0.62f, 0.66f);                // nose
@@ -2376,7 +2667,8 @@ static unsafe class Program
             "⛄  Build a snowman: stack three snowballs\n" +
             "🪟  Make snow fly: drag a window\n" +
             "✨  Hang fairy lights: ❄ tray icon → Fairy Lights\n" +
-            "🐧  Watch for visitors: a penguin, a snow fox or a rabbit drops by now and then\n\n" +
+            "🐧  Watch for visitors: a penguin, a snow fox or a rabbit drops by now and then.\n" +
+            "      Throw a snowball at one and see what it does!\n\n" +
             "Find everything under the ❄ icon in the system tray (bottom right).";
         MessageBoxW(IntPtr.Zero, text, "Welcome to desktopsnowfall ❄️", MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST);
     }
