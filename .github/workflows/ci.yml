@@ -36,15 +36,23 @@ jobs:
       - name: Self-tests (simulation, physics, visitors, drawing)
         run: dotnet run -c Release --project windows/tests/desktopsnowfall.tests.csproj
 
-      - name: Publish single-file exe (x64)
+      - name: Publish single-file exe (x64, trimmed, ~10 MB)
         run: >
           dotnet publish windows/desktopsnowfall.csproj -c Release -r win-x64 --self-contained
-          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o out/win-x64
+          -p:PublishSingleFile=true -p:PublishTrimmed=true -p:EnableCompressionInSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true -warnaserror -o out/win-x64
+
+      - name: Build installer (Inno Setup)
+        run: |
+          choco install innosetup -y --no-progress | Out-Null
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=0.0.0 /DSourceExe="$PWD\out\win-x64\desktopsnowfall.exe" installer\desktopsnowfall.iss
 
       - uses: actions/upload-artifact@v4
         with:
           name: desktopsnowfall-windows-x64
-          path: out/win-x64/desktopsnowfall.exe
+          path: |
+            out/win-x64/desktopsnowfall.exe
+            out/desktopsnowfall-setup-*.exe
           retention-days: 14
 
   macos:

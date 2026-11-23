@@ -23,18 +23,26 @@ jobs:
           dotnet-version: '8.0.x'
       - name: Self-tests
         run: dotnet run -c Release --project windows/tests/desktopsnowfall.tests.csproj
-      - name: Publish x64 and arm64
+      - name: Publish x64 and arm64 (single file, trimmed)
         run: |
           $v = "${{ github.ref_name }}".TrimStart('v')
           foreach ($rid in 'win-x64', 'win-arm64') {
             dotnet publish windows/desktopsnowfall.csproj -c Release -r $rid --self-contained `
-              -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=$v -o out/$rid
-            Compress-Archive -Path out/$rid/desktopsnowfall.exe -DestinationPath "desktopsnowfall-$rid-v$v.zip"
+              -p:PublishSingleFile=true -p:PublishTrimmed=true -p:EnableCompressionInSingleFile=true `
+              -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=$v -warnaserror -o out/$rid
+            Compress-Archive -Path out/$rid/desktopsnowfall.exe -DestinationPath "out/desktopsnowfall-$rid-portable-v$v.zip"
           }
+      - name: Installer (x64; also runs on Windows on Arm)
+        run: |
+          $v = "${{ github.ref_name }}".TrimStart('v')
+          choco install innosetup -y --no-progress | Out-Null
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=$v /DSourceExe="$PWD\out\win-x64\desktopsnowfall.exe" installer\desktopsnowfall.iss
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: desktopsnowfall-win-*.zip
+          path: |
+            out/desktopsnowfall-win-*-portable-*.zip
+            out/desktopsnowfall-setup-*.exe
 
   macos:
     name: macOS build
@@ -61,7 +69,7 @@ jobs:
           merge-multiple: true
       - name: Checksums
         working-directory: files
-        run: sha256sum *.zip | tee SHA256SUMS.txt
+        run: sha256sum *.zip *.exe | tee SHA256SUMS.txt
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
