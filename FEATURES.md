@@ -89,7 +89,21 @@ Everything desktopsnowfall can do today, and on which platform.
 | Clicks pass through to your apps, except right on a snowball | ✅ | ✅ |
 | Grabbing a snowball never takes focus from the app you're using | ✅ | ✅ |
 | Settings remembered between launches | Fairy lights only | All options (registry) |
-| Stops drawing while the display sleeps or the screen is locked | ✅ | ➖ |
+| Reset all settings | ➖ | ✅ |
+| Stops drawing while the display sleeps or the screen is locked | ✅ | ✅ |
+| Hides while a fullscreen video, game or presentation is in front | ➖ | ✅ |
+| Display scaling changes apply without a restart | ✅ | ✅ |
+| Performance: smooth (60 fps) or battery saver (30 fps); saves power when unplugged; slows down by itself on a slow machine | ➖ | ✅ |
+| Start with Windows / at login | ➖ | ✅ |
+| Version shown in the menu | ➖ | ✅ |
+
+## Downloads
+
+| | macOS | Windows |
+|---|:---:|:---:|
+| Ready-made app | Universal `.app` (zip) | Installer (x64) and portable 10 MB exe (x64, arm64) |
+| Uninstall | Drag to Trash | Settings → Apps (installer), or delete the exe (portable) |
+| Code-signed | ➖ (ad-hoc only) | ➖ |
 
 ### Windows tray menu
 
@@ -98,18 +112,20 @@ Everything desktopsnowfall can do today, and on which platform.
 - **Visitors 🐧**: Penguin, Snow fox, Rabbit, Invite one now
 - **Fairy Lights ✨** (press `L` while the menu is open)
 - **Light style**: the six colors, the six patterns, Snow on the wires
-- **Clear snow**, **How to Play**, **Pause snow**, **Quit**
+- **Clear snow**, **How to Play**
+- **Performance**: Smooth (60 fps) / Battery saver (30 fps), Save power when unplugged
+- **Start with Windows**, **Reset all settings**, **Pause snow**, **Quit**
 
 ## Under the hood
 
 - One source file per platform: `desktopsnowfall.swift` (SpriteKit) and `windows/Program.cs` (pure Win32 with its own small renderer). No extra packages.
 - Windows draws a frame without allocating memory. Heavy snow takes about 4 ms per frame at 1920×1080.
-- Windows has 124 automated checks (`cd windows/tests` then `dotnet run -c Release`) covering the simulation, physics, visitors and drawing.
+- Windows has 127 automated checks (`cd windows/tests` then `dotnet run -c Release`) covering the simulation, physics, visitors and drawing.
 
 ## Known limits
 
 - Only the main screen gets snow (both platforms).
-- Windows: changing the display scaling needs a restart.
 - The Dock or taskbar only gets snow when it sits at the bottom of the screen.
-- Neither version starts automatically at login.
+- The Mac version can't start at login by itself yet.
+- Neither version is code-signed or notarized.
 - The Experimental snowball size can only be changed in the registry (`HKCU\Software\desktopsnowfall\ExperimentalMaxRadius`).
