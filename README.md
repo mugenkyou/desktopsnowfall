@@ -68,8 +68,11 @@ Use the ❄ icon in the system tray to pause, pick the snow amount, switch the f
 - **Right-click a snowball to break it.** A left click only picks it up; set it down gently and it stays a snowball
 - **Winter visitors.** Now and then a penguin, a snow fox or a rabbit wanders along the bottom of the screen and leaves footprints in the snow. They walk behind your windows, never over them
 - **Livelier snow.** Some flakes are little turning crystals, a few sparkle, and now and then a gust of wind sweeps through
+- **Throw snowballs.** Pick one up, flick the mouse and let go. To aim, hold **Shift**, pull back and let go like a slingshot; a dotted line shows where it'll land
+- **Visitors react.** Hit the penguin and it tumbles and might throw one back; the fox leaps aside, the rabbit runs off to hide. They have their own habits too, and up to four can visit at once
+- **Prettier fairy lights.** Glass bulbs that sparkle on and off, six color sets (Warm White, Arctic Blue, Rainbow…), gentle patterns, and snow that settles on the wires
 
-Everything can be switched on or off from the ❄ tray menu: **Snow** (amount, gusts, crystal flakes), **Snowballs** (size: Normal, Large, Giant or Experimental; how many; trails; falling nose) and **Visitors** (each animal, or invite one now). You'll need the [.NET 8 SDK](https://dotnet.microsoft.com/download) (`winget install Microsoft.DotNet.SDK.8`).
+Everything can be switched on or off from the ❄ tray menu: **Snow** (amount, gusts, crystal flakes), **Light style** (colors, patterns, snow on the wires), **Snowballs** (size: Normal, Large, Giant or Experimental; how many; trails; falling nose) and **Visitors** (each animal, or invite one now). You'll need the [.NET 8 SDK](https://dotnet.microsoft.com/download) (`winget install Microsoft.DotNet.SDK.8`).
 
 ## Make it yours 🎨
 

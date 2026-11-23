@@ -45,6 +45,11 @@ Everything desktopsnowfall can do today, and on which platform.
 | Real collisions: big balls knock small ones flying, a hit travels down a row | ➖ | ✅ |
 | Powder bursts when snowballs collide | ➖ | ✅ |
 | Rolling trails: fading dents in the snow | ➖ | ✅ |
+| Throw a snowball: carry it, flick the mouse and let go (bigger balls fly slower) | ➖ | ✅ |
+| Aim like a slingshot: hold Shift, pull back and let go | ➖ | ✅ |
+| Dotted aiming guide showing the flight path and where it lands | ➖ | ✅ |
+| Thrown snowballs burst on windows, snowballs, snowmen, the ground and visitors | ➖ | ✅ |
+| A tip about throwing and Shift-aiming the first time you pick up a snowball | ➖ | ✅ |
 
 ## Snowmen
 
@@ -55,6 +60,7 @@ Everything desktopsnowfall can do today, and on which platform.
 | Snowman wobbles when a snowball hits it | ➖ | ✅ |
 | A solid knock sends the carrot nose flying (it lies in the snow, then fades) | ➖ | ✅ |
 | Bowling: a big fast snowball knocks the snowman over | ➖ | ✅ |
+| Hit a snowman's head with a thrown snowball and it can topple | ➖ | ✅ |
 
 ## Decorations and visitors
 
@@ -62,8 +68,15 @@ Everything desktopsnowfall can do today, and on which platform.
 |---|:---:|:---:|
 | Fairy lights: colorful twinkling bulbs that swing into place along window tops | ✅ | ✅ |
 | Fairy lights remembered between launches (off by default) | ✅ | ✅ |
-| Visitors: a penguin (waddles), a snow fox (trots) or a rabbit (hops), about once every 1–2.5 minutes | ➖ | ✅ |
+| Glass bulbs with a bright center, soft bloom and a pool of colored light; bulbs light up one by one | ➖ | ✅ |
+| Light colors: Classic Christmas, Warm White, Arctic Blue, Candy Colors, Rainbow, Golden Christmas | ➖ | ✅ |
+| Light patterns: Sparkle on & off (with star glints), Gentle twinkle, Slow breathing, Cascade, Alternating, Festive sparkle | ➖ | ✅ |
+| Lights sway in the wind and swing when a window moves | ➖ | ✅ |
+| Snow settles on the light wires and shakes off | ➖ | ✅ |
+| Visitors: penguins, snow foxes and rabbits; the first within ~15 s, then every 15–40 s, up to four at once | ➖ | ✅ |
 | Visitors leave fading footprints and walk behind windows, never over them | ➖ | ✅ |
+| Hit by a snowball, each reacts: the penguin tumbles, slides and shakes (and sometimes throws one back), the fox leaps aside and looks for you, the rabbit hops off to hide and comes back | ➖ | ✅ |
+| Personalities: the penguin slips, sits down and kicks snowballs; the fox jumps over small snowballs and chases rolling ones; the rabbit hops, listens and bolts | ➖ | ✅ |
 | Each visitor can be switched on or off; "Invite one now" | ➖ | ✅ |
 
 ## Controls and settings
@@ -84,13 +97,14 @@ Everything desktopsnowfall can do today, and on which platform.
 - **Snowballs**: Normal / Large / Giant / Experimental, at most 10 / 20 / 40, Rolling trails, Snowman's nose can fall off
 - **Visitors 🐧**: Penguin, Snow fox, Rabbit, Invite one now
 - **Fairy Lights ✨** (press `L` while the menu is open)
+- **Light style**: the six colors, the six patterns, Snow on the wires
 - **Clear snow**, **How to Play**, **Pause snow**, **Quit**
 
 ## Under the hood
 
 - One source file per platform: `desktopsnowfall.swift` (SpriteKit) and `windows/Program.cs` (pure Win32 with its own small renderer). No extra packages.
 - Windows draws a frame without allocating memory. Heavy snow takes about 4 ms per frame at 1920×1080.
-- Windows has 79 automated checks (`cd windows/tests` then `dotnet run -c Release`) covering the simulation, physics, visitors and drawing.
+- Windows has 124 automated checks (`cd windows/tests` then `dotnet run -c Release`) covering the simulation, physics, visitors and drawing.
 
 ## Known limits
 
