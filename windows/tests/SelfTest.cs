@@ -19,9 +19,11 @@ static unsafe class SelfTest
         if (!ok) fails++;
     }
 
-    static void Step(SnowWorld w, int frames)
+    static void Step(SnowWorld w, int frames) => Step(w, frames, Desk);
+
+    static void Step(SnowWorld w, int frames, List<Win> desk)
     {
-        for (int i = 0; i < frames; i++) w.Update(Dt, () => Desk, () => null);
+        for (int i = 0; i < frames; i++) w.Update(Dt, () => desk, () => null);
     }
 
     static SnowWorld NewWorld(out Pile pile, float sw = 1920, float sh = 1080)
@@ -64,6 +66,7 @@ static unsafe class SelfTest
         Snowmen();
         Clicks();
         Weather();
+        Visitors();
         Console.WriteLine(fails == 0 ? "\nAll checks passed." : $"\n{fails} check(s) failed.");
         Environment.Exit(fails == 0 ? 0 : 1);
     }
@@ -195,7 +198,7 @@ static unsafe class SelfTest
     static int LiveMarks(SnowWorld w)
     {
         int n = 0;
-        foreach (var m in w.Marks) if (m.Pile != null && w.T - m.Born < Cfg.TrailLife) n++;
+        foreach (var m in w.Marks) if (m.Pile != null && m.Pile != w.Ground && w.T - m.Born < m.Life) n++;
         return n;
     }
 
@@ -394,6 +397,121 @@ static unsafe class SelfTest
         for (int i = 0; i < 60 * 120; i++) { Step(calm, 1); most = MathF.Max(most, MathF.Abs(calm.Wind)); }
         Check(most <= 29.01f, $"with gusts off the wind stays a breeze for 2 minutes (max {most:0.0})");
         Cfg.Gusts = true;
+    }
+
+    // Penguin, snow fox, rabbit
+    static void Visitors()
+    {
+        {
+            var w = NewWorld(out _);
+            Step(w, 60 * 30);
+            Check(w.Visitor == null, "visitors are rare: nobody shows up in the first 30 s");
+        }
+        for (int kind = 0; kind < 3; kind++)
+        {
+            var w = NewWorld(out _);
+            FillSnow(w.Ground);
+            Check(w.Invite(kind) && w.Visitor.Kind == kind, $"{Cfg.VisitorNames[kind]} can be invited");
+            var v = w.Visitor;
+            float lo = v.X, hi = v.X;
+            bool hiddenOnOpenGround = false;
+            int frames = 0;
+            while (w.Visitor == v && frames < 60 * 240)
+            {
+                Step(w, 1); frames++;
+                lo = MathF.Min(lo, v.X); hi = MathF.Max(hi, v.X);
+                hiddenOnOpenGround |= v.Hidden;
+            }
+            int prints = 0;
+            foreach (var m in w.Marks) if (m.Pile == w.Ground) prints++;
+            Check(w.Visitor == null && hi - lo > 1000, $"{Cfg.VisitorNames[kind]} wanders across and leaves ({frames / 60} s, {hi - lo:0} px)");
+            Check(prints > 20, $"{Cfg.VisitorNames[kind]} leaves footprints in the snow ({prints})");
+            Check(!hiddenOnOpenGround, $"{Cfg.VisitorNames[kind]} is visible on open ground");
+        }
+        {
+            var cover = new List<Win> { new Win(3, 0, 600, 1920, 1080) };   // a maximized window down to the screen bottom
+            var w = NewWorld(out _);
+            w.Invite(1);
+            bool everShown = false;
+            for (int i = 0; i < 600; i++) { Step(w, 1, cover); everShown |= w.Visitor != null && !w.Visitor.Hidden && w.Visitor.X > 10 && w.Visitor.X < 1910; }
+            Check(!everShown, "a visitor walks behind windows, never on top of them");
+        }
+        {
+            var w = NewWorld(out _);
+            for (int i = 0; i < 3; i++) Cfg.Visitors[i] = false;
+            Check(!w.Invite(), "with every visitor switched off, nobody comes");
+            Cfg.Visitors[2] = true;
+            Check(!w.Invite(0) && w.Invite() && w.Visitor.Kind == 2, "each visitor can be switched on or off on its own");
+            for (int i = 0; i < 3; i++) Cfg.Visitors[i] = true;
+        }
+        {
+            var w = NewWorld(out _);
+            const int bw = 1920, bh = 1080;
+            var buf = new uint[bw * bh];
+            long alloc = 0;
+            fixed (uint* px = buf)
+                for (int kind = 0; kind < 3; kind++)
+                {
+                    w.SendAway();
+                    w.Invite(kind);
+                    w.Visitor.X = 900;
+                    Step(w, 2);
+                    Render.World(px, bw, bh, w, 1);
+                    long before = GC.GetAllocatedBytesForCurrentThread();
+                    for (int i = 0; i < 20; i++) Render.World(px, bw, bh, w, 1);
+                    alloc += GC.GetAllocatedBytesForCurrentThread() - before;
+                    Png(buf, bw, bh, 860, 1030, 80, 50, $"visitor-{kind}.png");
+                }
+            Check(alloc == 0, $"drawing visitors allocates nothing ({alloc} bytes)");
+        }
+    }
+
+    // Save a crop of the frame as a PNG (for looking at the drawings); only when SNOW_PNG_DIR is set
+    static void Png(uint[] buf, int bw, int bh, int x0, int y0, int w, int h, string name)
+    {
+        string dir = Environment.GetEnvironmentVariable("SNOW_PNG_DIR");
+        if (string.IsNullOrEmpty(dir)) return;
+        var raw = new byte[h * (w * 4 + 1)];
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+            {
+                uint c = buf[(y0 + y) * bw + x0 + x];
+                float a = (c >> 24) / 255f;
+                // composite the premultiplied overlay onto a dark-blue desktop so white things are visible
+                byte Mix(uint ch, float bg) => (byte)Math.Min(255, ch + bg * 255 * (1 - a));
+                int o = y * (w * 4 + 1) + 1 + x * 4;
+                raw[o] = Mix((c >> 16) & 0xFF, 0.16f); raw[o + 1] = Mix((c >> 8) & 0xFF, 0.22f);
+                raw[o + 2] = Mix(c & 0xFF, 0.36f); raw[o + 3] = 255;
+            }
+        using var ms = new System.IO.MemoryStream();
+        using (var z = new System.IO.Compression.ZLibStream(ms, System.IO.Compression.CompressionLevel.Optimal, true)) z.Write(raw);
+        var png = new System.IO.MemoryStream();
+        png.Write(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 });
+        void Chunk(string type, byte[] data)
+        {
+            var be = BitConverter.GetBytes(data.Length); Array.Reverse(be); png.Write(be);
+            var td = System.Text.Encoding.ASCII.GetBytes(type);
+            png.Write(td); png.Write(data);
+            uint crc = 0xFFFFFFFF;
+            foreach (var bt in td) crc = Crc(crc, bt);
+            foreach (var bt in data) crc = Crc(crc, bt);
+            var cb = BitConverter.GetBytes(crc ^ 0xFFFFFFFF); Array.Reverse(cb); png.Write(cb);
+        }
+        var ihdr = new byte[13];
+        var wb = BitConverter.GetBytes(w); Array.Reverse(wb); wb.CopyTo(ihdr, 0);
+        var hb = BitConverter.GetBytes(h); Array.Reverse(hb); hb.CopyTo(ihdr, 4);
+        ihdr[8] = 8; ihdr[9] = 6;
+        Chunk("IHDR", ihdr);
+        Chunk("IDAT", ms.ToArray());
+        Chunk("IEND", Array.Empty<byte>());
+        System.IO.File.WriteAllBytes(System.IO.Path.Combine(dir, name), png.ToArray());
+    }
+
+    static uint Crc(uint crc, byte b)
+    {
+        crc ^= b;
+        for (int k = 0; k < 8; k++) crc = (crc & 1) != 0 ? 0xEDB88320 ^ (crc >> 1) : crc >> 1;
+        return crc;
     }
 
     static string Snapshot(SnowWorld w)

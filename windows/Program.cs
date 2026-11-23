@@ -56,6 +56,10 @@ static class Cfg
     public const float NoseKnock = 80;             // knock (px/s) that sends the carrot flying
     public static bool Gusts = true;               // now and then a gentle gust sweeps the snow sideways (tray menu)
     public static bool FancyFlakes = true;         // some near flakes are six-armed crystals, a few sparkle (tray menu)
+    public static readonly bool[] Visitors = { true, true, true };   // penguin, snow fox, rabbit (tray menu)
+    public static readonly string[] VisitorNames = { "Penguin", "Snow fox", "Rabbit" };
+    public const float FirstVisit = 40;            // the first visitor comes after this long (s)
+    public const float VisitGapMin = 60, VisitGapMax = 150;   // then one every 1-2.5 minutes
     public const float SoftLanding = 380;          // a ball landing slower than this (px/s, ~a 80 px drop) settles instead of bursting
 
     // Largest snowball allowed on a w × h screen: always finite, and never more than a small share of the
@@ -204,6 +208,16 @@ sealed class Snowball
     }
 }
 
+// A small animal wandering along the bottom of the screen
+sealed class Visitor
+{
+    public int Kind;                 // 0 penguin, 1 snow fox, 2 rabbit
+    public float X, Y, Dir, Hop, Anim, PauseLeft, StepAcc, HopT = -1;
+    public bool Hidden, TurnedBack;
+    public int Foot;
+    public bool Walking => PauseLeft <= 0;
+}
+
 // A snowman's nose after a good knock: it tumbles down, lies in the snow for a while, then fades
 sealed class Carrot
 {
@@ -322,7 +336,7 @@ sealed class SnowWorld
 
     // Rolling trails: a fixed ring of dents, so playing never allocates. A dent belongs to its surface
     // (it moves with the window) and is only drawn where snow is still lying.
-    public struct Mark { public Pile Pile; public float Dx, Size, Born; }
+    public struct Mark { public Pile Pile; public float Dx, Size, Born, Alpha, Life; }
     public readonly Mark[] Marks = new Mark[256];
     int markNext;
 
@@ -453,6 +467,7 @@ sealed class SnowWorld
             pollAcc = 0;
         }
         StepFlakes(dt);
+        StepVisitor(dt);
         if (dragBall != null) StepDrag(dragBall, dt); else UpdateRolling(dt);
         StepBalls(dt);
         if (LightsOn) foreach (var s in Lights.Values) if (s.Animating(t)) { UpdateLights(); break; }   // smooth swing
@@ -762,8 +777,7 @@ sealed class SnowWorld
             if (b.TrailAcc >= MathF.Max(3, b.R * 0.5f))    // spacing grows with the ball so dents don't pile up
             {
                 b.TrailAcc = 0;
-                Marks[markNext] = new Mark { Pile = p, Dx = b.X - p.MinX, Size = b.R, Born = t };
-                markNext = (markNext + 1) % Marks.Length;
+                AddMark(p, b.X, b.R, 0.22f, Cfg.TrailLife);
             }
         }
     }
@@ -822,6 +836,102 @@ sealed class SnowWorld
         int n = Math.Min(12, (int)(speed / 40));
         for (int k = 0; k < n; k++)
             SpawnClump(x + Rnd.F(-2, 2), y + Rnd.F(-3, 3), Rnd.F(-80, 80), -Rnd.F(60, 160), -3);
+    }
+
+    void AddMark(Pile p, float x, float size, float alpha, float life)
+    {
+        Marks[markNext] = new Mark { Pile = p, Dx = x - p.MinX, Size = size, Born = t, Alpha = alpha, Life = life };
+        markNext = (markNext + 1) % Marks.Length;
+    }
+
+    // MARK: Visitors
+
+    public Visitor Visitor;
+    float visitAt = Cfg.FirstVisit;
+
+    // Send in a visitor now (kind -1: any enabled one). Only one at a time.
+    public bool Invite(int kind = -1)
+    {
+        if (Visitor != null) return false;
+        if (kind < 0)
+        {
+            int n = 0;
+            foreach (bool on in Cfg.Visitors) if (on) n++;
+            if (n == 0) return false;
+            int pick = Math.Min(n - 1, (int)Rnd.F(0, n));
+            for (int k = 0; k < Cfg.Visitors.Length; k++) if (Cfg.Visitors[k] && pick-- == 0) { kind = k; break; }
+        }
+        else if (!Cfg.Visitors[kind]) return false;
+        bool fromLeft = Rnd.F(0, 1) < 0.5f;
+        Visitor = new Visitor { Kind = kind, Dir = fromLeft ? 1 : -1, X = fromLeft ? -30 : W + 30 };
+        return true;
+    }
+
+    public void SendAway() { Visitor = null; visitAt = t + Rnd.F(Cfg.VisitGapMin, Cfg.VisitGapMax); }
+
+    void StepVisitor(float dt)
+    {
+        if (Visitor == null)
+        {
+            if (t >= visitAt && !Invite()) visitAt = t + 10;   // nobody enabled: look again later
+            return;
+        }
+        var v = Visitor;
+        if (!Cfg.Visitors[v.Kind]) { SendAway(); return; }
+        v.Anim += dt;
+        float moved = 0;
+        if (v.PauseLeft > 0) v.PauseLeft -= dt;
+        else if (v.Kind == 2)
+        {
+            // The rabbit hops: a short arc, a pair of prints where it lands, a little rest
+            if (v.HopT < 0) v.HopT = 0;
+            v.HopT += dt / 0.42f;
+            if (v.HopT >= 1)
+            {
+                v.HopT = -1;
+                v.Hop = 0;
+                Footprint(v.X - 2.5f, 3.2f);
+                Footprint(v.X + 2.5f, 3.2f);
+                v.PauseLeft = Rnd.F(0, 1) < 0.12f ? Rnd.F(1.5f, 3.5f) : Rnd.F(0.12f, 0.5f);
+            }
+            else
+            {
+                moved = v.Dir * 75 * dt;
+                v.Hop = MathF.Sin(MathF.PI * v.HopT) * 11;
+            }
+        }
+        else
+        {
+            // The penguin waddles slowly, the fox trots; both leave a line of alternating prints
+            moved = v.Dir * (v.Kind == 0 ? 32 : 85) * dt;
+            v.StepAcc += MathF.Abs(moved);
+            if (v.StepAcc >= (v.Kind == 0 ? 7 : 12))
+            {
+                v.StepAcc = 0;
+                v.Foot ^= 1;
+                Footprint(v.X + (v.Foot == 0 ? -1.5f : 1.5f), v.Kind == 0 ? 4 : 3);
+            }
+            if (Rnd.F(0, 1) < dt * 0.12f) v.PauseLeft = Rnd.F(1, 3);   // stops to look around now and then
+        }
+        v.X += moved;
+        // Sometimes it changes its mind halfway (once)
+        if (!v.TurnedBack && v.Walking && v.X > W * 0.25f && v.X < W * 0.75f && Rnd.F(0, 1) < dt * 0.02f)
+        {
+            v.Dir = -v.Dir;
+            v.TurnedBack = true;
+        }
+        int c = Ground.Col(v.X);
+        v.Y = c >= 0 ? Ground.Surface(c) + 1 : Ground.TopY;
+        // It walks behind windows: never drawn over anything you're working on
+        v.Hidden = false;
+        foreach (var w in Order)
+            if (w.Contains(v.X, v.Y - 10) || w.Contains(v.X - 12, v.Y - 6) || w.Contains(v.X + 12, v.Y - 6)) { v.Hidden = true; break; }
+        if ((v.Dir > 0 && v.X > W + 40) || (v.Dir < 0 && v.X < -40)) SendAway();
+    }
+
+    void Footprint(float x, float size)
+    {
+        if (Ground.Col(x) >= 0) AddMark(Ground, x, size, 0.45f, 7);
     }
 
     // Put a resting snowball on a surface (used by the self-tests)
@@ -1446,6 +1556,85 @@ unsafe static class Render
         (1.00f, 0.15f, 0.62f),   // pink
     };
 
+    // Draws in a visitor's own space: x forward (it faces Dir), y up from its feet, in logical px
+    struct Pen
+    {
+        public uint* Buf; public int Bw, Bh; public float S, X0, Y0, D;
+        float Px(float lx) => (X0 + D * lx) * S;
+        float Py(float ly) => (Y0 + ly) * S;
+        public void Ell(float lx, float ly, float a, float b, float r, float g, float bl) =>
+            Ellipse(Buf, Bw, Bh, Px(lx), Py(ly), a * S, b * S, 1, r, g, bl);
+        public void Cir(float lx, float ly, float rad, float r, float g, float bl) =>
+            Circle(Buf, Bw, Bh, Px(lx), Py(ly), rad * S, 1, r, g, bl);
+        public void Tri(float ax, float ay, float bx, float by, float cx, float cy, float r, float g, float bl) =>
+            Triangle(Buf, Bw, Bh, Px(ax), Py(ay), Px(bx), Py(by), Px(cx), Py(cy), r, g, bl);
+        public void Seg(float ax, float ay, float bx, float by, float wd, float r, float g, float bl) =>
+            Line(Buf, Bw, Bh, Px(ax), Py(ay), Px(bx), Py(by), wd * S, 1, r, g, bl);
+    }
+
+    static void Visitor(uint* buf, int bw, int bh, Visitor v, float s)
+    {
+        if (v.Hidden) return;
+        var p = new Pen { Buf = buf, Bw = bw, Bh = bh, S = s, X0 = v.X, Y0 = v.Y - v.Hop, D = v.Dir };
+        if (v.Kind == 0) Penguin(p, v);
+        else if (v.Kind == 1) Fox(p, v);
+        else Rabbit(p, v);
+    }
+
+    static void Penguin(Pen p, Visitor v)
+    {
+        float k = v.Walking ? MathF.Sin(v.Anim * 9) : 0;
+        float sway = k * 1.2f;                                         // waddle
+        p.Ell(-3, -0.8f - MathF.Max(0, k) * 1.5f, 3.2f, 1.3f, 0.98f, 0.55f, 0.15f);   // feet, lifted in turn
+        p.Ell(3, -0.8f - MathF.Max(0, -k) * 1.5f, 3.2f, 1.3f, 0.98f, 0.55f, 0.15f);
+        p.Ell(sway, -12, 8, 12, 0.12f, 0.13f, 0.18f);                  // body
+        p.Ell(sway - 5.5f, -12, 2.2f, 6.5f, 0.08f, 0.08f, 0.12f);      // flipper
+        p.Ell(sway + 1.6f, -10.5f, 5.6f, 9, 0.97f, 0.97f, 1);          // belly
+        p.Cir(sway + 0.5f, -22.5f, 6, 0.12f, 0.13f, 0.18f);            // head
+        p.Cir(sway + 2.6f, -22.5f, 3.4f, 0.97f, 0.97f, 1);             // face
+        p.Cir(sway + 3.4f, -23.4f, 1, 0.05f, 0.05f, 0.08f);            // eye
+        p.Tri(sway + 5.6f, -23.2f, sway + 9.5f, -21.8f, sway + 5.6f, -20.4f, 0.98f, 0.6f, 0.15f);   // beak
+    }
+
+    static void Fox(Pen p, Visitor v)
+    {
+        float g = v.Anim * 11, sw = v.Walking ? MathF.Sin(g) * 3 : 0, bob = v.Walking ? MathF.Abs(MathF.Sin(g)) * 0.8f : 0;
+        const float wr = 0.97f, wg = 0.97f, wb = 0.99f, sr = 0.78f, sg = 0.82f, sb = 0.91f;   // white fur, blue-grey shade
+        p.Seg(-9, -6 - bob, -9 + sw, -0.5f, 2.2f, sr, sg, sb);          // legs (far pair first)
+        p.Seg(5, -6 - bob, 5 - sw, -0.5f, 2.2f, sr, sg, sb);
+        p.Ell(-15, -12 - bob, 8.6f, 4.8f, sr, sg, sb);                  // bushy tail with a soft outline
+        p.Ell(-15, -12.4f - bob, 8, 4.2f, wr, wg, wb);
+        p.Cir(-21, -13 - bob, 3.2f, wr, wg, wb);
+        p.Ell(0, -9.6f - bob, 11.6f, 6.2f, sr, sg, sb);                 // body
+        p.Ell(0, -10.2f - bob, 11, 5.6f, wr, wg, wb);
+        p.Seg(-7, -6 - bob, -7 - sw, -0.5f, 2.2f, sr, sg, sb);          // near legs
+        p.Seg(7, -6 - bob, 7 + sw, -0.5f, 2.2f, sr, sg, sb);
+        p.Cir(11, -15 - bob, 5.6f, sr, sg, sb);                         // head
+        p.Cir(11, -15 - bob, 5, wr, wg, wb);
+        p.Tri(8, -18.5f - bob, 9.5f, -25 - bob, 11.5f, -19 - bob, wr, wg, wb);          // ears
+        p.Tri(11, -19.5f - bob, 13.2f, -25.5f - bob, 14.2f, -18.5f - bob, wr, wg, wb);
+        p.Tri(9, -19.5f - bob, 9.7f, -23 - bob, 10.8f, -19.5f - bob, 0.86f, 0.74f, 0.78f);
+        p.Tri(14, -17.2f - bob, 20, -14.4f - bob, 14, -12.2f - bob, wr, wg, wb);       // snout
+        p.Cir(19.6f, -14.5f - bob, 1.3f, 0.08f, 0.08f, 0.1f);           // nose
+        p.Cir(12.8f, -16.3f - bob, 1, 0.08f, 0.08f, 0.1f);              // eye
+    }
+
+    static void Rabbit(Pen p, Visitor v)
+    {
+        float k = v.Hop / 11;                                          // stretches out mid-hop
+        const float br = 0.62f, bg = 0.55f, bb = 0.50f;
+        p.Cir(-8, -9, 3.2f, 0.98f, 0.98f, 1);                           // cotton tail
+        p.Ell(0, -8, 8 + 2 * k, 7 - k, br, bg, bb);                      // body
+        p.Ell(2, -5.5f, 5, 3.5f, 0.82f, 0.77f, 0.72f);                  // belly
+        p.Ell(1.5f, -1.2f + k, 5.5f, 1.8f, br, bg, bb);                 // foot
+        p.Ell(5, -23 + k, 1.7f, 5.8f, br, bg, bb);                      // ears
+        p.Ell(7.8f, -22.3f + k, 1.7f, 5.8f, br, bg, bb);
+        p.Ell(7.8f, -22.3f + k, 0.7f, 4.2f, 0.92f, 0.7f, 0.72f);
+        p.Cir(7, -14, 5, br, bg, bb);                                   // head
+        p.Cir(9.2f, -15, 1, 0.08f, 0.08f, 0.1f);                        // eye
+        p.Cir(11.8f, -13.5f, 0.9f, 0.92f, 0.62f, 0.66f);                // nose
+    }
+
     // A loose carrot: the same orange cone as the nose, pointing along its spin; fades in its last second
     static void Carrot(uint* buf, int bw, int bh, Carrot c, float s, float t)
     {
@@ -1465,14 +1654,14 @@ unsafe static class Render
         {
             var m = w.Marks[i];
             float age = t - m.Born;
-            if (m.Pile == null || age < 0 || age >= Cfg.TrailLife) continue;
+            if (m.Pile == null || age < 0 || age >= m.Life) continue;
             var p = m.Pile;
             float x = p.MinX + m.Dx;
             int c = p.Col(x);
             if (c < 0 || p.Occ[c] || p.H[c] < 0.5f) continue;
             float ra = MathF.Max(1.5f, m.Size * 0.45f), rb = MathF.Max(0.8f, MathF.Min(p.H[c] * 0.5f, m.Size * 0.12f));
             Ellipse(buf, bw, bh, x * s, (p.Surface(c) + rb * 0.6f) * s, ra * s, rb * s,
-                    0.22f * (1 - age / Cfg.TrailLife), 0.72f, 0.80f, 0.93f);
+                    m.Alpha * (1 - age / m.Life), 0.72f, 0.80f, 0.93f);
         }
     }
 
@@ -1544,6 +1733,7 @@ unsafe static class Render
         foreach (var p in w.Piles.Values) Pile(buf, bw, bh, p, s);
         Pile(buf, bw, bh, w.Ground, s);
         Trails(buf, bw, bh, w, s);
+        if (w.Visitor != null) Visitor(buf, bw, bh, w.Visitor, s);
         Lights(buf, bw, bh, w, s);
         foreach (var f in w.Flakes) if (f.Clump) Disc(buf, bw, bh, f.X * s, f.Y * s, f.Size * 1.1f * s, f.Alpha);
         drawBalls.Clear();
@@ -1608,7 +1798,9 @@ static unsafe class Program
               CMD_LIGHT = 10, CMD_MEDIUM = 11, CMD_HEAVY = 12,
               CMD_GROWTH = 20,      // + growth mode 0..3
               CMD_MAXBALLS = 30,    // + index into MaxBallChoices
-              CMD_TRAILS = 40, CMD_CARROT = 41, CMD_GUSTS = 42, CMD_FANCY = 43;
+              CMD_TRAILS = 40, CMD_CARROT = 41, CMD_GUSTS = 42, CMD_FANCY = 43,
+              CMD_VISITOR = 50,     // + kind 0..2
+              CMD_INVITE = 55;
     static readonly int[] MaxBallChoices = { 10, 20, 40 };
     const string RegKey = @"Software\desktopsnowfall";
 
@@ -1955,6 +2147,12 @@ static unsafe class Program
         AppendMenuW(balls, MF_STRING | (Cfg.Trails ? MF_CHECKED : 0), (UIntPtr)CMD_TRAILS, "Rolling &trails");
         AppendMenuW(balls, MF_STRING | (Cfg.CarrotFalls ? MF_CHECKED : 0), (UIntPtr)CMD_CARROT, "Snowman's &nose can fall off");
         AppendMenuW(menu, MF_POPUP, (UIntPtr)(ulong)balls.ToInt64(), "&Snowballs");
+        IntPtr visitors = CreatePopupMenu();
+        for (int i = 0; i < Cfg.Visitors.Length; i++)
+            AppendMenuW(visitors, MF_STRING | (Cfg.Visitors[i] ? MF_CHECKED : 0), (UIntPtr)(uint)(CMD_VISITOR + i), Cfg.VisitorNames[i]);
+        AppendMenuW(visitors, MF_SEPARATOR, UIntPtr.Zero, null);
+        AppendMenuW(visitors, MF_STRING, (UIntPtr)CMD_INVITE, "&Invite one now");
+        AppendMenuW(menu, MF_POPUP, (UIntPtr)(ulong)visitors.ToInt64(), "&Visitors 🐧");
         AppendMenuW(menu, MF_STRING | (world.LightsOn ? MF_CHECKED : 0), (UIntPtr)CMD_LIGHTS, "Fairy &Lights ✨");
         AppendMenuW(menu, MF_STRING, (UIntPtr)CMD_CLEAR, "&Clear snow");
         AppendMenuW(menu, MF_STRING, (UIntPtr)CMD_GUIDE, "&How to Play ❔");
@@ -1984,6 +2182,14 @@ static unsafe class Program
                 break;
             case CMD_GUIDE: ShowGuide(); break;
             case CMD_QUIT: Quit(); break;
+            case >= CMD_VISITOR and < CMD_VISITOR + 3:
+                Cfg.Visitors[cmd - CMD_VISITOR] = !Cfg.Visitors[cmd - CMD_VISITOR];
+                WriteSetting("Visitor" + (cmd - CMD_VISITOR), Cfg.Visitors[cmd - CMD_VISITOR]);
+                break;
+            case CMD_INVITE:
+                world.SendAway();
+                world.Invite();
+                break;
             case CMD_GUSTS:
                 Cfg.Gusts = !Cfg.Gusts;
                 WriteSetting("Gusts", Cfg.Gusts);
@@ -2023,7 +2229,8 @@ static unsafe class Program
             "💥  Break it: right-click a snowball\n" +
             "⛄  Build a snowman: stack three snowballs\n" +
             "🪟  Make snow fly: drag a window\n" +
-            "✨  Hang fairy lights: ❄ tray icon → Fairy Lights\n\n" +
+            "✨  Hang fairy lights: ❄ tray icon → Fairy Lights\n" +
+            "🐧  Watch for visitors: a penguin, a snow fox or a rabbit drops by now and then\n\n" +
             "Find everything under the ❄ icon in the system tray (bottom right).";
         MessageBoxW(IntPtr.Zero, text, "Welcome to desktopsnowfall ❄️", MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST);
     }
@@ -2038,6 +2245,7 @@ static unsafe class Program
         Cfg.Trails = ReadInt("Trails", 1) != 0;
         Cfg.CarrotFalls = ReadInt("CarrotFalls", 1) != 0;
         Cfg.Gusts = ReadInt("Gusts", 1) != 0;
+        for (int i = 0; i < Cfg.Visitors.Length; i++) Cfg.Visitors[i] = ReadInt("Visitor" + i, 1) != 0;
         Cfg.FancyFlakes = ReadInt("FancyFlakes", 1) != 0;
     }
 
