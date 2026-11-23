@@ -124,6 +124,7 @@ sealed class Pile
     public readonly float[] H, Caps;  // current height / max height per column
     public readonly bool[] Occ;       // column hidden behind a window in front
     public bool Dirty;
+    public bool IsGround, Taskbar;    // a screen's bottom edge (on its taskbar, if Taskbar)
 
     public Pile(float minX, float topY, float width, float maxH)
     {
@@ -178,6 +179,29 @@ sealed class Pile
     }
 
     public void Clear() { Array.Clear(H); Dirty = true; }
+}
+
+// One display, in world coordinates (logical px, origin at the top-left of the whole desktop)
+readonly record struct Mon(float L, float T, float R, float B)
+{
+    public float Width => R - L;
+    public bool Contains(float x, float y) => x >= L && x < R && y >= T && y < B;
+}
+
+static class Layout
+{
+    // Physical monitor rectangles (as Windows reports them; they may start at negative coordinates) to world
+    // rectangles: shifted so the desktop's top-left corner is (0, 0) and divided by the display scale.
+    // The first monitor stays first (the caller puts the primary monitor there).
+    public static List<Mon> ToWorld(IReadOnlyList<(int L, int T, int R, int B)> mons, float scale, out int originX, out int originY)
+    {
+        originX = int.MaxValue; originY = int.MaxValue;
+        foreach (var m in mons) { originX = Math.Min(originX, m.L); originY = Math.Min(originY, m.T); }
+        var list = new List<Mon>();
+        foreach (var m in mons)
+            list.Add(new Mon((m.L - originX) / scale, (m.T - originY) / scale, (m.R - originX) / scale, (m.B - originY) / scale));
+        return list;
+    }
 }
 
 record struct Win(long Id, float L, float T, float R, float B)
@@ -439,8 +463,10 @@ sealed class SnowWorld
     public readonly Dictionary<long, Pile> Piles = new();
     readonly Dictionary<long, Win> lastRect = new();
     public List<Win> Order = new();              // windows from front to back
-    public Pile Ground;
-    public bool GroundIsTaskbar;
+    public List<Mon> Monitors = new();          // the screens, the first one the main screen
+    public readonly List<Pile> Grounds = new();  // the floor: each screen's bottom edge or taskbar
+    public Pile Ground => Grounds.Count > 0 ? Grounds[0] : null;   // the main screen's floor
+    float[] taskbarTops = Array.Empty<float>();
     float pollAcc, t;
     public float T => t;
     float ballMax = Cfg.MaxRadius(1920, 1080);   // snowball size limit for this screen, refreshed every frame
@@ -468,30 +494,80 @@ sealed class SnowWorld
     public readonly Mark[] Marks = new Mark[256];
     int markNext;
 
-    public SnowWorld(float w, float h)
+    public SnowWorld(float w, float h) : this(new List<Mon> { new(0, 0, w, h) }) { }
+
+    public SnowWorld(List<Mon> monitors)
     {
-        W = w; H = h;
-        ResetGround(h, false);
+        SetMonitors(monitors);
         for (int i = 0; i < Cfg.TargetFlakes; i++) SpawnFlake(Rnd.F(0, H));
     }
 
-    public void Resize(float w, float h)
+    public void Resize(float w, float h) => SetMonitors(new List<Mon> { new(0, 0, w, h) });
+
+    // Screens were added, removed, moved or rescaled. Snow on the old floors falls (and snowballs on them
+    // drop), and the world now spans the new desktop.
+    public void SetMonitors(List<Mon> monitors)
     {
-        W = w; H = h;
-        ResetGround(h, false);
+        Monitors = monitors;
+        W = 0; H = 0;
+        foreach (var m in monitors) { W = MathF.Max(W, m.R); H = MathF.Max(H, m.B); }
+        taskbarTops = Array.Empty<float>();
+        BuildGrounds();
     }
 
-    void ResetGround(float top, bool taskbar)
+    // The floor of each screen is its taskbar (if there's one along the bottom) or its bottom edge. Where
+    // another screen sits directly below, there's no floor: snow falls on down into that screen.
+    void BuildGrounds()
     {
-        if (Ground != null) Release(Ground, 0, 0, GroundId);   // also drops the snowballs on it
-        GroundIsTaskbar = taskbar;
-        Ground = new Pile(0, top, W, taskbar ? Cfg.TaskbarPileMax : Cfg.GroundPileMax);
+        foreach (var g in Grounds) Release(g, 0, 0, GroundId);
+        Grounds.Clear();
+        for (int i = 0; i < Monitors.Count; i++)
+        {
+            var m = Monitors[i];
+            float tb = i < taskbarTops.Length ? taskbarTops[i] : float.NaN;
+            bool taskbar = !float.IsNaN(tb);
+            float top = taskbar ? tb : m.B;
+            // the stretches of this bottom edge with no screen underneath
+            var below = new List<(float L, float R)>();
+            if (!taskbar)
+                foreach (var n in Monitors)
+                    if (n != m && MathF.Abs(n.T - m.B) < 2 && n.R > m.L && n.L < m.R) below.Add((MathF.Max(n.L, m.L), MathF.Min(n.R, m.R)));
+            below.Sort();
+            float from = m.L;
+            foreach (var (l, r) in below) { AddGround(from, l, top, taskbar); from = MathF.Max(from, r); }
+            AddGround(from, m.R, top, taskbar);
+        }
+    }
+
+    void AddGround(float from, float to, float top, bool taskbar)
+    {
+        if (to - from >= 20)
+            Grounds.Add(new Pile(from, top, to - from, taskbar ? Cfg.TaskbarPileMax : Cfg.GroundPileMax) { IsGround = true, Taskbar = taskbar });
+    }
+
+    public bool OnScreen(float x, float y)
+    {
+        foreach (var m in Monitors) if (m.Contains(x, y)) return true;
+        return false;
+    }
+
+    // The floor under x (the first one, top screen first), or null in a gap between screens
+    public Pile GroundAt(float x)
+    {
+        foreach (var g in Grounds) if (g.Col(x) >= 0) return g;
+        return null;
+    }
+
+    bool OnTaskbar(float x, float y)
+    {
+        foreach (var g in Grounds) if (g.Taskbar && g.Col(x) >= 0 && y >= g.TopY) return true;
+        return false;
     }
 
     public void ClearAll()
     {
         foreach (var p in Piles.Values) p.Clear();
-        Ground.Clear();
+        foreach (var g in Grounds) g.Clear();
         Balls.Clear();
         Carrots.Clear();
         activeBall = dragBall = null;
@@ -584,14 +660,15 @@ sealed class SnowWorld
 
     // MARK: Per-frame update
 
-    public void Update(float dt, Func<List<Win>> readWindows, Func<float?> readTaskbarTop)
+    // readTaskbars: for each screen, the top of a taskbar along its bottom, or NaN (null: no taskbars at all)
+    public void Update(float dt, Func<List<Win>> readWindows, Func<float[]> readTaskbars)
     {
         t += dt;
         ballMax = Cfg.MaxRadius(W, H);
         pollAcc += dt;
         if (pollAcc >= Cfg.PollInterval)
         {
-            PollWindows(pollAcc, readWindows(), readTaskbarTop());
+            PollWindows(pollAcc, readWindows(), readTaskbars());
             pollAcc = 0;
         }
         StepFlakes(dt);
@@ -605,12 +682,15 @@ sealed class SnowWorld
         }
     }
 
-    void PollWindows(float dt, List<Win> wins, float? taskbarTop)
+    void PollWindows(float dt, List<Win> wins, float[] taskbars)
     {
-        // Taskbar at the bottom: the snow on the "ground" sits on top of it
-        float groundTop = taskbarTop ?? H;
-        bool taskbar = taskbarTop.HasValue;
-        if (MathF.Abs(groundTop - Ground.TopY) > 1 || taskbar != GroundIsTaskbar) ResetGround(groundTop, taskbar);
+        // A taskbar appeared, moved or went away: the floors change
+        taskbars ??= Array.Empty<float>();
+        bool changed = taskbars.Length != taskbarTops.Length;
+        for (int i = 0; !changed && i < taskbars.Length; i++)
+            changed = float.IsNaN(taskbars[i]) != float.IsNaN(taskbarTops[i]) ||
+                      (!float.IsNaN(taskbars[i]) && MathF.Abs(taskbars[i] - taskbarTops[i]) > 1);
+        if (changed) { taskbarTops = (float[])taskbars.Clone(); BuildGrounds(); }
 
         // Closed / minimized windows: their snow just falls
         var alive = new HashSet<long>();
@@ -654,7 +734,7 @@ sealed class SnowWorld
         ComputeOcclusion();
         UpdateLights();
         foreach (var p in Piles.Values) p.Relax();
-        Ground.Relax();
+        foreach (var g in Grounds) g.Relax();
     }
 
     // MARK: Fairy lights
@@ -683,7 +763,7 @@ sealed class SnowWorld
             int front = i;
             s.ApplyVisibility((x, y) =>
             {
-                if (y < 0 || (GroundIsTaskbar && y >= Ground.TopY)) return true;
+                if (y < 0 || OnTaskbar(x, y) || !OnScreen(x, y)) return true;
                 for (int j = 0; j < front; j++) if (Order[j].Contains(x, y)) return true;
                 return false;
             });
@@ -979,17 +1059,19 @@ sealed class SnowWorld
             if (b.Falling || b.Dragging || b.Hidden || b.Below != null || b.Pile == null) continue;
             if (MathF.Abs(mx - b.X) < b.R + 8 && my <= b.Pile.TopY + 6 && my >= b.Pile.TopY - 2 * b.R - 8) return b.Pile;
         }
-        if (GroundIsTaskbar)
+        foreach (var g in Grounds)
         {
-            if (MouseOver(Ground, mx, my)) return Ground;
-            if (my >= Ground.TopY) return null;          // over the taskbar itself
+            if (!g.Taskbar || g.Col(mx) < 0) continue;
+            if (MouseOver(g, mx, my)) return g;
+            if (my >= g.TopY) return null;               // over the taskbar itself
         }
         foreach (var w in Order)
         {
             if (Piles.TryGetValue(w.Id, out var p) && MouseOver(p, mx, my)) return p;
             if (w.Contains(mx, my)) return null;         // over a window's content
         }
-        return MouseOver(Ground, mx, my) ? Ground : null;
+        foreach (var g in Grounds) if (!g.Taskbar && MouseOver(g, mx, my)) return g;
+        return null;
     }
 
     void UpdateRolling(float dt)
@@ -1204,10 +1286,11 @@ sealed class SnowWorld
             v.Dir = -v.Dir;                  // sometimes it changes its mind halfway (once)
             v.TurnedBack = true;
         }
-        int c = Ground.Col(v.X);
-        v.Y = c >= 0 ? Ground.Surface(c) + 1 : Ground.TopY;
-        // It walks behind windows: never drawn over anything you're working on
-        v.Hidden = false;
+        float onDesk = Math.Clamp(v.X, 0, W - 0.01f);   // (while it walks in from beyond the edge: the floor at the edge)
+        var floor = GroundAt(onDesk);
+        if (floor != null) v.Y = floor.Surface(floor.Col(onDesk)) + 1;   // (in a gap between screens it keeps its height)
+        // It walks behind windows: never drawn over anything you're working on (and not where there's no screen)
+        v.Hidden = !OnScreen(onDesk, v.Y - 10);
         foreach (var w in Order)
             if (w.Contains(v.X, v.Y - 10) || w.Contains(v.X - 12, v.Y - 6) || w.Contains(v.X + 12, v.Y - 6)) { v.Hidden = true; break; }
         bool off = v.X < -40 || v.X > W + 40;
@@ -1319,7 +1402,7 @@ sealed class SnowWorld
     {
         foreach (var b in Balls)
         {
-            if (b.Pile != Ground || !OnSurface(b) || b.Hidden) continue;
+            if (b.Pile == null || !b.Pile.IsGround || !OnSurface(b) || b.Hidden) continue;
             float ahead = (b.X - v.X) * v.Dir;
             if (ahead >= minAhead && ahead <= b.R + reach) return b;
         }
@@ -1330,7 +1413,7 @@ sealed class SnowWorld
     Snowball RollingNear(Visitor v, float range, float minSpeed)
     {
         foreach (var b in Balls)
-            if (b.Pile == Ground && OnSurface(b) && MathF.Abs(b.Vx) > minSpeed && MathF.Abs(b.X - v.X) < range) return b;
+            if (b.Pile != null && b.Pile.IsGround && OnSurface(b) && MathF.Abs(b.Vx) > minSpeed && MathF.Abs(b.X - v.X) < range) return b;
         return null;
     }
 
@@ -1419,7 +1502,7 @@ sealed class SnowWorld
             case VisitorAct.Chase:           // fox: dashes after a rolling snowball and bats it along
             {
                 var b = v.Target;
-                if (b == null || !Balls.Contains(b) || b.Pile != Ground || !OnSurface(b)) { done = true; break; }   // keeps after it even once it slows
+                if (b == null || !Balls.Contains(b) || b.Pile == null || !b.Pile.IsGround || !OnSurface(b)) { done = true; break; }   // keeps after it even once it slows
                 v.Dir = v.Face = MathF.Sign(b.X - v.X);
                 moved = v.Dir * 140 * dt;
                 Prints(v, moved);
@@ -1458,7 +1541,7 @@ sealed class SnowWorld
         v.SlideV *= MathF.Exp(-2.2f * dt);
         float moved = v.Face * v.SlideV * dt;
         v.StepAcc += MathF.Abs(moved);
-        if (v.StepAcc >= 6) { v.StepAcc = 0; if (Ground.Col(v.X) >= 0) AddMark(Ground, v.X, 9, 0.35f, 7); }   // a belly track
+        if (v.StepAcc >= 6) { v.StepAcc = 0; var g = GroundAt(v.X); if (g != null) AddMark(g, v.X, 9, 0.35f, 7); }   // a belly track
         return moved;
     }
 
@@ -1481,7 +1564,8 @@ sealed class SnowWorld
 
     void Footprint(float x, float size)
     {
-        if (Ground.Col(x) >= 0) AddMark(Ground, x, size, 0.45f, 7);
+        var g = GroundAt(x);
+        if (g != null) AddMark(g, x, size, 0.45f, 7);
     }
 
     // Put a resting snowball on a surface (used by the self-tests)
@@ -1666,9 +1750,15 @@ sealed class SnowWorld
             float s = onEdge ? p.TopY + 1.5f : p.Surface(c);
             if (top <= s && bottom > s) return p;
         }
-        // The ground catches everything that reaches the bottom, even where a window covers it
-        int g = Ground.Col(x);
-        return g >= 0 && bottom > (onEdge ? Ground.TopY + 1.5f : Ground.Surface(g)) ? Ground : null;
+        // The floor catches everything that reaches it, even where a window covers it
+        foreach (var g in Grounds)
+        {
+            int c = g.Col(x);
+            if (c < 0) continue;
+            float s = onEdge ? g.TopY + 1.5f : g.Surface(c);
+            if (top <= s && bottom > s) return g;
+        }
+        return null;
     }
 
     // A gently dropped ball comes to rest on the surface (keeping its sideways speed, so it rolls on)
@@ -1737,22 +1827,23 @@ sealed class SnowWorld
             for (int c = 0; c < p.Count; c++)
             {
                 float x = p.ColX(c), y = p.TopY - 1;
-                bool o = x < 0 || x > W || y < 0;
+                bool o = !OnScreen(x, y);
                 if (!o) for (int j = 0; j < i; j++) if (Order[j].Contains(x, y)) { o = true; break; }
                 if (o != p.Occ[c]) { p.Occ[c] = o; if (o) p.H[c] = 0; p.Dirty = true; }
             }
         }
-        // The taskbar is always in front of windows; the plain screen bottom is not
-        for (int c = 0; c < Ground.Count; c++)
-        {
-            bool o = false;
-            if (!GroundIsTaskbar)
+        // A taskbar is always in front of windows; a plain screen bottom is not
+        foreach (var g in Grounds)
+            for (int c = 0; c < g.Count; c++)
             {
-                float x = Ground.ColX(c), y = Ground.TopY - 1;
-                foreach (var w in Order) if (w.Contains(x, y)) { o = true; break; }
+                bool o = false;
+                if (!g.Taskbar)
+                {
+                    float x = g.ColX(c), y = g.TopY - 1;
+                    foreach (var w in Order) if (w.Contains(x, y)) { o = true; break; }
+                }
+                if (o != g.Occ[c]) { g.Occ[c] = o; if (o) g.H[c] = 0; g.Dirty = true; }
             }
-            if (o != Ground.Occ[c]) { Ground.Occ[c] = o; if (o) Ground.H[c] = 0; Ground.Dirty = true; }
-        }
     }
 
     // A few sines at different frequencies add up to a gentle breeze; every 25-70 s a gust swells and fades
@@ -1824,20 +1915,18 @@ sealed class SnowWorld
                         }
                     }
                 }
-                // Then the taskbar / bottom of the screen
+                // Then a taskbar / the bottom of a screen
                 if (!gone)
-                {
-                    int c = Ground.Col(f.X);
-                    if (c >= 0 && f.Y > Ground.Surface(c))
+                    foreach (var g in Grounds)
                     {
-                        if (!Ground.Occ[c])
-                        {
-                            float gain = GroundIsTaskbar ? Cfg.TaskbarGain : 1;
-                            Ground.Add(c, (f.Clump ? 1.6f : f.Size * 0.12f) * gain);
-                        }
+                        int c = g.Col(f.X);
+                        if (c < 0) continue;
+                        float sf = g.Surface(c);
+                        if (prevY > sf || f.Y <= sf) continue;
+                        if (!g.Occ[c]) g.Add(c, (f.Clump ? 1.6f : f.Size * 0.12f) * (g.Taskbar ? Cfg.TaskbarGain : 1));
                         gone = true;
+                        break;
                     }
-                }
             }
             if (!gone)
             {
@@ -1878,16 +1967,17 @@ unsafe static class Render
     public static void Disc(uint* buf, int bw, int bh, float cx, float cy, float radius, float alpha,
                             float cr = 1, float cg = 1, float cb = 1)
     {
-        int x0 = Math.Max(0, (int)MathF.Floor(cx - radius)), x1 = Math.Min(bw - 1, (int)MathF.Ceiling(cx + radius));
-        int y0 = Math.Max(0, (int)MathF.Floor(cy - radius)), y1 = Math.Min(bh - 1, (int)MathF.Ceiling(cy + radius));
+        // loop over this buffer's pixels, but measure in world pixels (same numbers on every screen)
+        int x0 = Math.Max(0, (int)MathF.Floor(cx - radius - OX)), x1 = Math.Min(bw - 1, (int)MathF.Ceiling(cx + radius - OX));
+        int y0 = Math.Max(0, (int)MathF.Floor(cy - radius - OY)), y1 = Math.Min(bh - 1, (int)MathF.Ceiling(cy + radius - OY));
         float inv = 1 / radius;
         for (int y = y0; y <= y1; y++)
         {
-            float dy = (y + 0.5f - cy) * inv;
+            float dy = (y + OY + 0.5f - cy) * inv;
             uint* row = buf + (long)y * bw;
             for (int x = x0; x <= x1; x++)
             {
-                float dx = (x + 0.5f - cx) * inv;
+                float dx = (x + OX + 0.5f - cx) * inv;
                 float d = MathF.Sqrt(dx * dx + dy * dy);
                 if (d >= 1) continue;
                 float a = d < 0.45f ? 1 - 0.4f * (d / 0.45f) : 0.6f * (1 - (d - 0.45f) / 0.55f);
@@ -1962,12 +2052,12 @@ unsafe static class Render
     static void Fill<T>(uint* buf, int bw, int bh, float x0, float y0, float x1, float y1, in T sdf,
                         float alpha, float r, float g, float b) where T : struct, ISdf
     {
-        int ix0 = Math.Max(0, (int)MathF.Floor(x0) - 1), ix1 = Math.Min(bw - 1, (int)MathF.Ceiling(x1) + 1);
-        int iy0 = Math.Max(0, (int)MathF.Floor(y0) - 1), iy1 = Math.Min(bh - 1, (int)MathF.Ceiling(y1) + 1);
+        int ix0 = Math.Max(0, (int)MathF.Floor(x0 - OX) - 1), ix1 = Math.Min(bw - 1, (int)MathF.Ceiling(x1 - OX) + 1);
+        int iy0 = Math.Max(0, (int)MathF.Floor(y0 - OY) - 1), iy1 = Math.Min(bh - 1, (int)MathF.Ceiling(y1 - OY) + 1);
         for (int y = iy0; y <= iy1; y++)
             for (int x = ix0; x <= ix1; x++)
             {
-                float cov = Math.Clamp(0.5f - sdf.D(x + 0.5f, y + 0.5f), 0, 1);
+                float cov = Math.Clamp(0.5f - sdf.D(x + OX + 0.5f, y + OY + 0.5f), 0, 1);
                 if (cov > 0) Blend(buf + (long)y * bw + x, cov * alpha, r, g, b);
             }
     }
@@ -2029,12 +2119,12 @@ unsafe static class Render
     {
         float cx = ball.X * s, cy = ball.Y * s, R = ball.R * s;
         float hx = cx - 0.24f * R, hy = cy - 0.28f * R, er = 1.1f * R;
-        int x0 = Math.Max(0, (int)MathF.Floor(cx - R)), x1 = Math.Min(bw - 1, (int)MathF.Ceiling(cx + R));
-        int y0 = Math.Max(0, (int)MathF.Floor(cy - R)), y1 = Math.Min(bh - 1, (int)MathF.Ceiling(cy + R));
+        int x0 = Math.Max(0, (int)MathF.Floor(cx - OX - R)), x1 = Math.Min(bw - 1, (int)MathF.Ceiling(cx - OX + R));
+        int y0 = Math.Max(0, (int)MathF.Floor(cy - OY - R)), y1 = Math.Min(bh - 1, (int)MathF.Ceiling(cy - OY + R));
         for (int y = y0; y <= y1; y++)
             for (int x = x0; x <= x1; x++)
             {
-                float px = x + 0.5f, py = y + 0.5f;
+                float px = x + OX + 0.5f, py = y + OY + 0.5f;
                 float cov = Math.Clamp(R + 0.5f - MathF.Sqrt((px - cx) * (px - cx) + (py - cy) * (py - cy)), 0, 1);
                 if (cov <= 0) continue;
                 float u = MathF.Min(1, MathF.Sqrt((px - hx) * (px - hx) + (py - hy) * (py - hy)) / er);
@@ -2296,12 +2386,13 @@ unsafe static class Render
     // A pile: white mound above its edge with a thin blue-grey shadow just below it
     public static void Pile(uint* buf, int bw, int bh, Pile p, float s)
     {
-        int px0 = Math.Max(0, (int)MathF.Floor(p.MinX * s)), px1 = Math.Min(bw - 1, (int)MathF.Ceiling((p.MinX + p.Width) * s));
-        float baseY = p.TopY * s;
+        int px0 = Math.Max(0, (int)MathF.Floor(p.MinX * s - OX)), px1 = Math.Min(bw - 1, (int)MathF.Ceiling((p.MinX + p.Width) * s - OX));
+        float baseY = p.TopY * s;                 // world pixels; rows below are converted to this buffer's rows
+        int oy = (int)OY;
         for (int px = px0; px <= px1; px++)
         {
             // Interpolate the height between column centres for a smooth outline
-            float u = ((px + 0.5f) / s - p.MinX) / Cfg.ColW - 0.5f;
+            float u = ((px + OX + 0.5f) / s - p.MinX) / Cfg.ColW - 0.5f;
             int c0 = (int)MathF.Floor(u);
             float fr = u - c0;
             int ca = Math.Clamp(c0, 0, p.Count - 1), cb = Math.Clamp(c0 + 1, 0, p.Count - 1);
@@ -2312,28 +2403,32 @@ unsafe static class Render
             float top = baseY - h;
             // shadow: 1.5 logical px below the edge
             float shEnd = baseY + 1.5f * s;
-            for (int y = Math.Max(0, (int)MathF.Floor(baseY)); y < Math.Min(bh, (int)MathF.Ceiling(shEnd)); y++)
+            for (int y = Math.Max(oy, (int)MathF.Floor(baseY)); y < Math.Min(oy + bh, (int)MathF.Ceiling(shEnd)); y++)
             {
                 float cov = MathF.Min(1, shEnd - y);
-                Blend(buf + (long)y * bw + px, 0.9f * cov, 0.70f, 0.78f, 0.92f);
+                Blend(buf + (long)(y - oy) * bw + px, 0.9f * cov, 0.70f, 0.78f, 0.92f);
             }
             // body
             int yTop = (int)MathF.Floor(top);
-            for (int y = Math.Max(0, yTop); y < Math.Min(bh, (int)MathF.Ceiling(baseY)); y++)
+            for (int y = Math.Max(oy, yTop); y < Math.Min(oy + bh, (int)MathF.Ceiling(baseY)); y++)
             {
                 float cov = y == yTop ? 1 - (top - yTop) : 1;   // anti-aliased top edge
-                Blend(buf + (long)y * bw + px, 0.97f * cov, 1, 1, 1);
+                Blend(buf + (long)(y - oy) * bw + px, 0.97f * cov, 1, 1, 1);
             }
         }
     }
 
-    public static void World(uint* buf, int bw, int bh, SnowWorld w, float s)
+    // Where this buffer sits in the world, in physical px: each screen draws its own slice of one world
+    static float OX, OY;
+
+    public static void World(uint* buf, int bw, int bh, SnowWorld w, float s, float ox = 0, float oy = 0)
     {
+        OX = ox; OY = oy;
         new Span<uint>(buf, bw * bh).Clear();
         // far + middle flakes, piles, lights, clumps, snowballs, near flakes, then the ball being carried
         foreach (var f in w.Flakes) if (!f.Clump && f.Layer < 2) Flake(buf, bw, bh, f, s, w.T);
         foreach (var p in w.Piles.Values) Pile(buf, bw, bh, p, s);
-        Pile(buf, bw, bh, w.Ground, s);
+        foreach (var g in w.Grounds) Pile(buf, bw, bh, g, s);
         Trails(buf, bw, bh, w, s);
         foreach (var v in w.Visitors) Visitor(buf, bw, bh, v, s);
         Lights(buf, bw, bh, w, s);
@@ -2468,6 +2563,7 @@ static unsafe class Program
 
     delegate IntPtr WndProcFn(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
     delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+    delegate bool MonitorEnumProc(IntPtr monitor, IntPtr hdc, ref RECT rect, IntPtr data);
 
     // --- imports
     [DllImport("user32.dll", SetLastError = true)] static extern IntPtr SetProcessDpiAwarenessContext(IntPtr value);
@@ -2500,7 +2596,8 @@ static unsafe class Program
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassNameW(IntPtr hWnd, StringBuilder sb, int max);
     [DllImport("user32.dll")] static extern int GetWindowTextLengthW(IntPtr hWnd);
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hWnd, out RECT rc);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindowW(string cls, string name);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindowExW(IntPtr parent, IntPtr after, string cls, string name);
+    [DllImport("user32.dll")] static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr clip, MonitorEnumProc proc, IntPtr data);
     [DllImport("user32.dll")] static extern int GetSystemMetrics(int index);
     [DllImport("user32.dll")] static extern IntPtr CreatePopupMenu();
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool AppendMenuW(IntPtr menu, uint flags, UIntPtr id, string text);
@@ -2541,8 +2638,16 @@ static unsafe class Program
     // --- state
     static WndProcFn wndProc;                 // kept alive so the GC doesn't collect the callback
     static EnumWindowsProc enumProc;
-    static IntPtr overlay, tray, screenDC, memDC, dib, bits, trayIcon;
-    static int bw, bh;                        // buffer size in physical pixels
+    static IntPtr tray, screenDC, memDC, trayIcon;
+    // One transparent overlay per screen, each showing its own part of the one snow world
+    sealed class Surface { public IntPtr Hwnd, Dib, Bits; public int X, Y, W, H; public bool Hidden; }
+    static readonly List<Surface> surfaces = new();
+    static readonly List<RECT> monitorsFound = new();
+    static MonitorEnumProc monProc;
+    static int originX, originY;              // top-left of the whole desktop (physical px; can be negative)
+    static bool rebuildPending;               // screens changed: rebuild the overlays on the next frame
+    static RECT fullscreenMon;                // the screen a fullscreen app is on
+    static IntPtr stockBitmap;                // memDC's original bitmap: put back before deleting ours (a selected bitmap can't be deleted)
     static float scale = 1;                   // physical pixels per logical pixel (DPI / 96)
     static SnowWorld world;
     static readonly Stopwatch clock = Stopwatch.StartNew();
@@ -2552,8 +2657,7 @@ static unsafe class Program
     static bool aimTipShown;                  // the "flick to throw, Shift to aim" tip, once per launch
     // Not drawing while nobody can see it: screen locked, display off, or a fullscreen app (game, video,
     // presentation) in front. Checked by notifications (lock, display) and every half second (fullscreen).
-    static bool locked, displayOff, fullscreenApp, hiddenNow;
-    static bool Suspended => locked || displayOff || fullscreenApp;
+    static bool locked, displayOff, fullscreenApp;
     static int fullscreenCheck, frameMs, slowFrames;
     static bool slowMachine;                  // frames kept taking too long at 60 fps: run at 30
     static double workMs;                     // smoothed time spent simulating + drawing a frame
@@ -2580,24 +2684,16 @@ static unsafe class Program
         };
         RegisterClassExW(ref wc);
 
-        bw = GetSystemMetrics(0);   // SM_CXSCREEN (primary monitor)
-        bh = GetSystemMetrics(1);   // SM_CYSCREEN
-        // Transparent, click-through, always on top, never takes focus, not in Alt+Tab
-        overlay = CreateWindowExW(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-                                  "desktopsnowfallWnd", "desktopsnowfall", WS_POPUP, 0, 0, bw, bh,
-                                  IntPtr.Zero, IntPtr.Zero, inst, IntPtr.Zero);
-        // A hidden window that owns the tray icon and its menu
+        monProc = MonProc;
+        // A hidden window that owns the tray icon, its menu and the frame timer
         tray = CreateWindowExW(WS_EX_TOOLWINDOW, "desktopsnowfallWnd", "desktopsnowfall tray", WS_POPUP, 0, 0, 0, 0,
                                IntPtr.Zero, IntPtr.Zero, inst, IntPtr.Zero);
-
-        uint dpi = GetDpiForWindow(overlay);
-        scale = dpi > 0 ? dpi / 96f : 1;
         screenDC = GetDC(IntPtr.Zero);
-        CreateSurface();
+        memDC = CreateCompatibleDC(IntPtr.Zero);
         LoadSettings();
-        world = new SnowWorld(bw / scale, bh / scale) { LightsOn = ReadSetting("FairyLights") };   // off by default
+        BuildSurfaces();
+        world.LightsOn = ReadSetting("FairyLights");   // off by default
 
-        ShowWindow(overlay, SW_SHOWNOACTIVATE);
         AddTrayIcon();
         taskbarCreated = RegisterWindowMessageW("TaskbarCreated");
         WTSRegisterSessionNotification(tray, 0);                // lock / unlock
@@ -2618,21 +2714,62 @@ static unsafe class Program
         }
     }
 
-    static void CreateSurface()
+    static bool MonProc(IntPtr monitor, IntPtr hdc, ref RECT rect, IntPtr data)
     {
-        if (memDC == IntPtr.Zero) memDC = CreateCompatibleDC(IntPtr.Zero);
-        if (dib != IntPtr.Zero) DeleteObject(dib);
-        var bmi = new BITMAPINFO
+        monitorsFound.Add(rect);
+        return true;
+    }
+
+    static bool IsSurface(IntPtr h)
+    {
+        foreach (var sf in surfaces) if (sf.Hwnd == h) return true;
+        return false;
+    }
+
+    // (Re)create one overlay per screen and tell the world where the screens are. The main screen (the one
+    // at 0, 0) comes first. Called at start and whenever screens are added, removed, moved or rescaled.
+    static void BuildSurfaces()
+    {
+        if (stockBitmap != IntPtr.Zero) SelectObject(memDC, stockBitmap);
+        foreach (var sf in surfaces) { DestroyWindow(sf.Hwnd); DeleteObject(sf.Dib); }
+        surfaces.Clear();
+        monitorsFound.Clear();
+        EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, monProc, IntPtr.Zero);
+        if (monitorsFound.Count == 0) monitorsFound.Add(new RECT { Right = GetSystemMetrics(0), Bottom = GetSystemMetrics(1) });
+        int primary = monitorsFound.FindIndex(r => r.Left == 0 && r.Top == 0);
+        if (primary > 0) { var r0 = monitorsFound[primary]; monitorsFound.RemoveAt(primary); monitorsFound.Insert(0, r0); }
+
+        IntPtr inst = GetModuleHandleW(null);
+        foreach (var r in monitorsFound)
         {
-            bmiHeader = new BITMAPINFOHEADER
+            var sf = new Surface { X = r.Left, Y = r.Top, W = r.Right - r.Left, H = r.Bottom - r.Top };
+            // Transparent, click-through, always on top, never takes focus, not in Alt+Tab
+            sf.Hwnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                                      "desktopsnowfallWnd", "desktopsnowfall", WS_POPUP, sf.X, sf.Y, sf.W, sf.H,
+                                      IntPtr.Zero, IntPtr.Zero, inst, IntPtr.Zero);
+            var bmi = new BITMAPINFO
             {
-                biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>(),
-                biWidth = bw, biHeight = -bh,   // negative = top-down rows
-                biPlanes = 1, biBitCount = 32, biCompression = 0,
-            }
-        };
-        dib = CreateDIBSection(memDC, ref bmi, 0, out bits, IntPtr.Zero, 0);
-        SelectObject(memDC, dib);
+                bmiHeader = new BITMAPINFOHEADER
+                {
+                    biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>(),
+                    biWidth = sf.W, biHeight = -sf.H,   // negative = top-down rows
+                    biPlanes = 1, biBitCount = 32, biCompression = 0,
+                }
+            };
+            sf.Dib = CreateDIBSection(memDC, ref bmi, 0, out sf.Bits, IntPtr.Zero, 0);
+            sf.Hidden = true;                    // UpdateVisibility shows it
+            surfaces.Add(sf);
+        }
+        // Snow is sized by the main screen's scale (with mixed scaling it looks a little bigger or smaller
+        // on the other screens)
+        uint dpi = GetDpiForWindow(surfaces[0].Hwnd);
+        scale = dpi > 0 ? dpi / 96f : 1;
+        var rects = monitorsFound.ConvertAll(r => (r.Left, r.Top, r.Right, r.Bottom));
+        var mons = Layout.ToWorld(rects, scale, out originX, out originY);
+        if (world == null) world = new SnowWorld(mons);
+        else world.SetMonitors(mons);
+        catching = false;                        // new overlays start out click-through
+        UpdateVisibility();
     }
 
     static IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
@@ -2640,23 +2777,24 @@ static unsafe class Program
         switch (msg)
         {
             case WM_TIMER:
-                if (hWnd == overlay) Tick();
-                else if (hWnd == tray) { KillTimer(tray, (UIntPtr)2); ShowGuide(); }
+                if (hWnd != tray) return IntPtr.Zero;
+                if (wParam == 1) Tick();
+                else if (wParam == 2) { KillTimer(tray, (UIntPtr)2); ShowGuide(); }
                 return IntPtr.Zero;
             case WM_MOUSEACTIVATE:
                 return (IntPtr)MA_NOACTIVATE;   // grabbing a snowball never steals focus from your apps
             case WM_RBUTTONDOWN:
-                if (hWnd == overlay) world.Smash(world.MouseX, world.MouseY);   // right click breaks a snowball
+                if (IsSurface(hWnd)) world.Smash(world.MouseX, world.MouseY);   // right click breaks a snowball
                 return IntPtr.Zero;
             case WM_LBUTTONDOWN:
-                if (hWnd == overlay && world.BeginDrag(world.MouseX, world.MouseY))
+                if (IsSurface(hWnd) && world.BeginDrag(world.MouseX, world.MouseY))
                 {
-                    SetCapture(overlay);
+                    SetCapture(hWnd);                // keeps the mouse even when it moves onto another screen
                     if (!aimTipShown && !ReadSetting("UsedAim")) { aimTipShown = true; ShowAimTip(); }
                 }
                 return IntPtr.Zero;
             case WM_LBUTTONUP:
-                if (hWnd == overlay && world.DragBall != null)
+                if (IsSurface(hWnd) && world.DragBall != null)
                 {
                     world.EndDrag();
                     ReleaseCapture();
@@ -2664,19 +2802,11 @@ static unsafe class Program
                 }
                 return IntPtr.Zero;
             case WM_CAPTURECHANGED:
-                if (hWnd == overlay) world.EndDrag();
+                if (IsSurface(hWnd)) world.EndDrag();
                 return IntPtr.Zero;
-            case WM_DISPLAYCHANGE:
+            case WM_DISPLAYCHANGE:              // a screen was added, removed, moved or changed resolution
             case WM_DPICHANGED:                 // display scaling changed: re-measure, no restart needed
-                if (hWnd == overlay)
-                {
-                    bw = GetSystemMetrics(0);
-                    bh = GetSystemMetrics(1);
-                    uint dpi = GetDpiForWindow(overlay);
-                    if (dpi > 0) scale = dpi / 96f;
-                    CreateSurface();
-                    world.Resize(bw / scale, bh / scale);
-                }
+                rebuildPending = true;           // (not right here: this may be one of the overlays being replaced)
                 return IntPtr.Zero;
             case WM_WTSSESSION_CHANGE:
                 if (wParam == WTS_SESSION_LOCK) locked = true;
@@ -2711,13 +2841,24 @@ static unsafe class Program
         return DefWindowProcW(hWnd, msg, wParam, lParam);
     }
 
-    // Show the overlay only when snow is wanted and someone can see it
+    // Show each screen's overlay only when snow is wanted and someone can see it (a fullscreen app hides the
+    // snow on its own screen only)
     static void UpdateVisibility()
     {
-        bool hide = paused || Suspended;
-        if (hide == hiddenNow) return;
-        hiddenNow = hide;
-        ShowWindow(overlay, hide ? SW_HIDE : SW_SHOWNOACTIVATE);
+        foreach (var sf in surfaces)
+        {
+            bool hide = paused || locked || displayOff ||
+                        (fullscreenApp && sf.X == fullscreenMon.Left && sf.Y == fullscreenMon.Top);
+            if (hide == sf.Hidden) continue;
+            sf.Hidden = hide;
+            ShowWindow(sf.Hwnd, hide ? SW_HIDE : SW_SHOWNOACTIVATE);
+        }
+    }
+
+    static bool AllHidden()
+    {
+        foreach (var sf in surfaces) if (!sf.Hidden) return false;
+        return true;
     }
 
     // The app in front covers its whole monitor, taskbar included (a video, a game, a slideshow, F11 in a browser).
@@ -2725,7 +2866,7 @@ static unsafe class Program
     static bool ForegroundIsFullscreen()
     {
         IntPtr fg = GetForegroundWindow();
-        if (fg == IntPtr.Zero || fg == overlay || fg == tray) return false;
+        if (fg == IntPtr.Zero || IsSurface(fg) || fg == tray) return false;
         clsName.Clear();
         GetClassNameW(fg, clsName, clsName.Capacity);
         string cls = clsName.ToString();
@@ -2733,6 +2874,7 @@ static unsafe class Program
         if (!GetWindowRect(fg, out RECT r)) return false;
         var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
         if (!GetMonitorInfoW(MonitorFromWindow(fg, 2), ref mi)) return false;
+        fullscreenMon = mi.rcMonitor;
         return r.Left <= mi.rcMonitor.Left && r.Top <= mi.rcMonitor.Top && r.Right >= mi.rcMonitor.Right && r.Bottom >= mi.rcMonitor.Bottom;
     }
 
@@ -2742,7 +2884,7 @@ static unsafe class Program
     {
         bool saver = Cfg.PerfMode == 1 || (Cfg.SaveOnBattery && OnBattery()) || slowMachine;
         frameMs = saver ? Cfg.SaverFrameMs : Cfg.FrameMs;
-        SetTimer(overlay, (UIntPtr)1, (uint)frameMs, IntPtr.Zero);   // replaces the running timer
+        SetTimer(tray, (UIntPtr)1, (uint)frameMs, IntPtr.Zero);   // replaces the running timer
     }
 
     static void Tick()
@@ -2750,30 +2892,47 @@ static unsafe class Program
         double now = clock.Elapsed.TotalSeconds;
         float dt = (float)Math.Min(now - lastT, 1.0 / 20);
         lastT = now;
+        if (rebuildPending)
+        {
+            rebuildPending = false;
+            if (world.DragBall != null) { world.EndDrag(); ReleaseCapture(); }
+            BuildSurfaces();
+        }
         if (++fullscreenCheck >= 30)
         {
             fullscreenCheck = 0;
             // (Not QUNS_BUSY: Windows reports that for our own full-screen topmost overlay, too)
-            fullscreenApp = ForegroundIsFullscreen() ||
-                            (SHQueryUserNotificationState(out int st) == 0 && st is QUNS_RUNNING_D3D_FULL_SCREEN or QUNS_PRESENTATION_MODE);
+            fullscreenApp = ForegroundIsFullscreen();
+            if (!fullscreenApp && SHQueryUserNotificationState(out int st) == 0 && st is QUNS_RUNNING_D3D_FULL_SCREEN or QUNS_PRESENTATION_MODE)
+            {
+                fullscreenApp = true;            // a fullscreen game or a presentation: on the main screen
+                fullscreenMon = new RECT { Left = surfaces[0].X, Top = surfaces[0].Y };
+            }
             UpdateVisibility();
         }
-        if (paused || Suspended) return;
+        if (paused || locked || displayOff || AllHidden()) return;
         long started = Stopwatch.GetTimestamp();
 
         GetCursorPos(out POINT m);
-        world.MouseX = m.X / scale;
+        world.MouseX = (m.X - originX) / scale;
+        world.MouseY = (m.Y - originY) / scale;
         world.AimKey = (GetKeyState(0x10) & 0x8000) != 0;   // Shift: slingshot aiming
-        world.MouseY = m.Y / scale;
-        world.Update(dt, ReadWindows, ReadTaskbarTop);
+        world.Update(dt, ReadWindows, ReadTaskbars);
         UpdateMouseCapture();
-        Render.World((uint*)bits, bw, bh, world, scale);
 
-        var dst = new POINT();
+        // Each screen draws its own part of the world into its own overlay
         var src = new POINT();
-        var size = new SIZE { cx = bw, cy = bh };
         var blend = new BLENDFUNCTION { BlendOp = 0, SourceConstantAlpha = 255, AlphaFormat = 1 };   // AC_SRC_ALPHA
-        UpdateLayeredWindow(overlay, screenDC, ref dst, ref size, memDC, ref src, 0, ref blend, ULW_ALPHA);
+        foreach (var sf in surfaces)
+        {
+            if (sf.Hidden) continue;
+            Render.World((uint*)sf.Bits, sf.W, sf.H, world, scale, sf.X - originX, sf.Y - originY);
+            IntPtr previous = SelectObject(memDC, sf.Dib);
+            if (stockBitmap == IntPtr.Zero) stockBitmap = previous;
+            var dst = new POINT { X = sf.X, Y = sf.Y };
+            var size = new SIZE { cx = sf.W, cy = sf.H };
+            UpdateLayeredWindow(sf.Hwnd, screenDC, ref dst, ref size, memDC, ref src, 0, ref blend, ULW_ALPHA);
+        }
 
         // Adaptive: if frames keep taking most of the 60 fps budget (a slow machine, a huge screen), drop to 30 fps
         workMs = workMs * 0.95 + Stopwatch.GetElapsedTime(started).TotalMilliseconds * 0.05;
@@ -2791,9 +2950,12 @@ static unsafe class Program
         bool want = world.DragBall != null || world.BallAt(world.MouseX, world.MouseY) != null;
         if (want == catching) return;
         catching = want;
-        long ex = GetWindowLongPtrW(overlay, GWL_EXSTYLE).ToInt64();
-        ex = want ? ex & ~(long)WS_EX_TRANSPARENT : ex | WS_EX_TRANSPARENT;
-        SetWindowLongPtrW(overlay, GWL_EXSTYLE, (IntPtr)ex);
+        foreach (var sf in surfaces)
+        {
+            long ex = GetWindowLongPtrW(sf.Hwnd, GWL_EXSTYLE).ToInt64();
+            ex = want ? ex & ~(long)WS_EX_TRANSPARENT : ex | WS_EX_TRANSPARENT;
+            SetWindowLongPtrW(sf.Hwnd, GWL_EXSTYLE, (IntPtr)ex);
+        }
     }
 
     // MARK: Windows on screen
@@ -2807,7 +2969,7 @@ static unsafe class Program
 
     static bool EnumProc(IntPtr h, IntPtr _)
     {
-        if (h == overlay || h == tray) return true;
+        if (h == tray || IsSurface(h)) return true;
         if (!IsWindowVisible(h) || IsIconic(h)) return true;
         long ex = GetWindowLongPtrW(h, GWL_EXSTYLE).ToInt64();
         if ((ex & WS_EX_TOOLWINDOW) != 0) return true;                       // tool windows, popups
@@ -2818,24 +2980,35 @@ static unsafe class Program
         GetClassNameW(h, clsName, clsName.Capacity);
         string cls = clsName.ToString();
         if (cls == "Progman" || cls == "WorkerW" || cls == "Shell_TrayWnd" || cls == "Shell_SecondaryTrayWnd") return true;
+        if (cls == "#32768") return true;                                     // right-click / popup menus come and go
 
         // The visible frame (GetWindowRect includes invisible resize borders on Windows 10/11)
         if (DwmGetWindowAttribute(h, DWMWA_EXTENDED_FRAME_BOUNDS, out RECT rc, Marshal.SizeOf<RECT>()) != 0)
             GetWindowRect(h, out rc);
-        float l = rc.Left / scale, t = rc.Top / scale, r = rc.Right / scale, b = rc.Bottom / scale;
+        float l = (rc.Left - originX) / scale, t = (rc.Top - originY) / scale, r = (rc.Right - originX) / scale, b = (rc.Bottom - originY) / scale;
         if (r - l < 80 || b - t < 40) return true;
         found.Add(new Win(h.ToInt64(), l, t, r, b));
         return true;
     }
 
-    // Top edge of the taskbar when it sits at the bottom and is visible; otherwise null
-    static float? ReadTaskbarTop()
+    // For each screen, the top edge of a taskbar along its bottom (visible, not auto-hidden), or NaN
+    static float[] ReadTaskbars()
     {
-        IntPtr tb = FindWindowW("Shell_TrayWnd", null);
-        if (tb == IntPtr.Zero || !IsWindowVisible(tb) || !GetWindowRect(tb, out RECT rc)) return null;
-        int w = rc.Right - rc.Left, h = rc.Bottom - rc.Top;
-        if (w <= h || rc.Top < bh / 2 || rc.Top >= bh - 4) return null;   // not at the bottom, or auto-hidden
-        return rc.Top / scale;
+        var tops = new float[surfaces.Count];
+        Array.Fill(tops, float.NaN);
+        foreach (string cls in new[] { "Shell_TrayWnd", "Shell_SecondaryTrayWnd" })
+            for (IntPtr tb = FindWindowExW(IntPtr.Zero, IntPtr.Zero, cls, null); tb != IntPtr.Zero; tb = FindWindowExW(IntPtr.Zero, tb, cls, null))
+            {
+                if (!IsWindowVisible(tb) || !GetWindowRect(tb, out RECT rc) || rc.Right - rc.Left <= rc.Bottom - rc.Top) continue;
+                for (int i = 0; i < surfaces.Count; i++)
+                {
+                    var sf = surfaces[i];
+                    bool onIt = rc.Left < sf.X + sf.W && rc.Right > sf.X;
+                    bool atBottom = rc.Bottom >= sf.Y + sf.H - 2 && rc.Top > sf.Y + sf.H / 2 && rc.Top < sf.Y + sf.H - 4;
+                    if (onIt && atBottom) tops[i] = (rc.Top - originY) / scale;
+                }
+            }
+        return tops;
     }
 
     // MARK: Tray icon and menu
@@ -3111,7 +3284,7 @@ static unsafe class Program
     static void Quit()
     {
         Cleanup();
-        DestroyWindow(overlay);
+        foreach (var sf in surfaces) DestroyWindow(sf.Hwnd);
         DestroyWindow(tray);
         PostQuitMessage(0);
     }
@@ -3119,14 +3292,19 @@ static unsafe class Program
     // Give back everything borrowed from Windows (safe to call twice)
     static void Cleanup()
     {
-        KillTimer(overlay, (UIntPtr)1);
+        KillTimer(tray, (UIntPtr)1);
         var nid = TrayData();
         Shell_NotifyIconW(NIM_DELETE, ref nid);
         WTSUnRegisterSessionNotification(tray);
         if (powerNotify != IntPtr.Zero) { UnregisterPowerSettingNotification(powerNotify); powerNotify = IntPtr.Zero; }
         if (trayIcon != IntPtr.Zero) { DestroyIcon(trayIcon); trayIcon = IntPtr.Zero; }
-        if (memDC != IntPtr.Zero) { DeleteDC(memDC); memDC = IntPtr.Zero; }
-        if (dib != IntPtr.Zero) { DeleteObject(dib); dib = IntPtr.Zero; }
+        if (memDC != IntPtr.Zero)
+        {
+            if (stockBitmap != IntPtr.Zero) SelectObject(memDC, stockBitmap);
+            DeleteDC(memDC);
+            memDC = IntPtr.Zero;
+        }
+        foreach (var sf in surfaces) if (sf.Dib != IntPtr.Zero) { DeleteObject(sf.Dib); sf.Dib = IntPtr.Zero; }
         if (screenDC != IntPtr.Zero) { ReleaseDC(IntPtr.Zero, screenDC); screenDC = IntPtr.Zero; }
     }
 }

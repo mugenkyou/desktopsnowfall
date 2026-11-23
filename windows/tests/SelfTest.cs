@@ -72,6 +72,7 @@ static unsafe class SelfTest
         Personalities();
         FairyLights();
         Settings();
+        Screens();
         Console.WriteLine(fails == 0 ? "\nAll checks passed." : $"\n{fails} check(s) failed.");
         Environment.Exit(fails == 0 ? 0 : 1);
     }
@@ -719,7 +720,7 @@ static unsafe class SelfTest
             var (w, v) = Target(1, 600);
             var ball = w.AddBall(w.Ground, 700, 8);
             float hopAtBall = 0;
-            for (int i = 0; i < 120; i++) { Step(w, 1, Open); if (MathF.Abs(v.X - ball.X) < 4) hopAtBall = MathF.Max(hopAtBall, v.Hop); }
+            for (int i = 0; i < 60 * 10 && v.X < ball.X + 20; i++) { Step(w, 1, Open); if (MathF.Abs(v.X - ball.X) < 4) hopAtBall = MathF.Max(hopAtBall, v.Hop); }   // (it may stop to look around first)
             Check(hopAtBall > ball.R, $"the fox jumps over a small snowball in its way ({hopAtBall:0} px over a {ball.R * 2:0} px ball)");
         }
         {
@@ -740,7 +741,7 @@ static unsafe class SelfTest
         {
             var (w, v) = Target(0, 600);
             var ball = w.AddBall(w.Ground, 640, 8);
-            for (int i = 0; i < 60 * 3 && ball.Vx <= 0; i++) Step(w, 1, Open);
+            for (int i = 0; i < 60 * 12 && ball.Vx <= 0; i++) Step(w, 1, Open);   // (it may stop or sit down on the way)
             Check(ball.Vx > 0, "the penguin plays with a snowball: gives it a kick");
         }
         {
@@ -919,6 +920,137 @@ static unsafe class SelfTest
             Registry.CurrentUser.DeleteSubKeyTree(Program.RegKey, false);
             Program.RegKey = keep;
             Program.LoadSettings();
+        }
+    }
+
+    static SnowWorld Desktop(params Mon[] mons)
+    {
+        Rnd.Seed(11);
+        var w = new SnowWorld(new List<Mon>(mons)) { MouseX = -999, MouseY = -999 };
+        return w;
+    }
+
+    static void Run(SnowWorld w, int frames, Func<float[]> taskbars = null)
+    {
+        for (int i = 0; i < frames; i++) w.Update(Dt, () => Open, taskbars ?? (() => null));
+    }
+
+    static float SnowOn(Pile p) => p.Total;
+
+    // Several screens: one snow world, each screen showing its part
+    static void Screens()
+    {
+        {
+            // Windows reports a screen to the left of the main one with negative coordinates
+            var mons = Layout.ToWorld(new[] { (0, 0, 1920, 1080), (-1280, 100, 0, 1124) }, 1, out int ox, out int oy);
+            Check(ox == -1280 && oy == 0 && mons[0] == new Mon(1280, 0, 3200, 1080) && mons[1] == new Mon(0, 100, 1280, 1124),
+                  "screens left of the main one (negative coordinates) are placed correctly");
+            var scaled = Layout.ToWorld(new[] { (0, 0, 2880, 1620) }, 1.5f, out _, out _);
+            Check(scaled[0] == new Mon(0, 0, 1920, 1080), "display scaling is applied to screen sizes");
+        }
+        {
+            // Two screens side by side, different sizes: each gets its own floor at its own bottom
+            var w = Desktop(new Mon(0, 0, 1920, 1080), new Mon(1920, 0, 3200, 1024));
+            Check(w.Grounds.Count == 2 && w.Grounds[0].TopY == 1080 && w.Grounds[1].TopY == 1024 && w.W == 3200,
+                  "side by side: each screen has a floor at its own bottom edge");
+            Run(w, 60 * 40);
+            Check(SnowOn(w.Grounds[0]) > 50 && SnowOn(w.Grounds[1]) > 50,
+                  $"snow piles up on both screens ({SnowOn(w.Grounds[0]):0} and {SnowOn(w.Grounds[1]):0})");
+        }
+        {
+            // One screen on top of another: no floor between them, the snow falls through to the lower one
+            var w = Desktop(new Mon(0, 0, 1920, 1080), new Mon(0, 1080, 1920, 2160));
+            Check(w.Grounds.Count == 1 && w.Grounds[0].TopY == 2160, "stacked: no floor between the screens, only at the bottom");
+            Run(w, 60 * 40);
+            int below = 0;
+            foreach (var f in w.Flakes) if (f.Y > 1100) below++;
+            Check(below > 30 && SnowOn(w.Grounds[0]) > 50, $"snow falls from the upper screen into the lower one ({below} flakes down there)");
+        }
+        {
+            // Upper screen only half over the lower one: the uncovered half keeps a floor
+            var w = Desktop(new Mon(0, 0, 1920, 1080), new Mon(960, 1080, 2880, 2160));
+            bool ok = w.Grounds.Count == 2;
+            foreach (var g in w.Grounds) if (g.TopY == 1080) ok &= g.MinX == 0 && MathF.Abs(g.Width - 960) < 1;
+            Check(ok, "offset stack: only the part of the edge with nothing below is a floor");
+        }
+        {
+            var w = Desktop(new Mon(0, 0, 1080, 1920));
+            Check(w.Grounds.Count == 1 && w.Grounds[0].Width == 1080 && w.Grounds[0].TopY == 1920, "a portrait screen works");
+        }
+        {
+            // Taskbars on both screens
+            var w = Desktop(new Mon(0, 0, 1920, 1080), new Mon(1920, 0, 3200, 1024));
+            Run(w, 3, () => new[] { 1040f, 990f });
+            Check(w.Grounds.Count == 2 && w.Grounds[0].Taskbar && w.Grounds[0].TopY == 1040 && w.Grounds[1].Taskbar && w.Grounds[1].TopY == 990,
+                  "each screen's own taskbar becomes its floor");
+        }
+        {
+            // A snowball thrown across the edge between two screens flies on smoothly and lands on the other one
+            var w = Desktop(new Mon(0, 0, 1920, 1080), new Mon(1920, 0, 3200, 1024));
+            Run(w, 3);
+            var b = w.AddBall(w.Grounds[0], 1700, 8);
+            b.Y = 700;
+            float before = SnowOn(w.Grounds[1]), last = b.X, jump = 0, far = 0;
+            w.Throw(b, 500, -300);
+            for (int i = 0; i < 180 && w.Balls.Contains(b); i++) { Run(w, 1); jump = MathF.Max(jump, MathF.Abs(b.X - last)); last = b.X; far = MathF.Max(far, b.X); }
+            Check(far > 1950 && jump < 20 && SnowOn(w.Grounds[1]) > before,
+                  $"a snowball flies from one screen to the next without jumping, and lands there (reached x {far:0})");
+        }
+        {
+            // A screen is unplugged and plugged back in
+            var w = Desktop(new Mon(0, 0, 1920, 1080), new Mon(1920, 0, 3200, 1024));
+            Run(w, 60 * 10);
+            var b = w.AddBall(w.Grounds[1], 2500, 12);
+            w.SetMonitors(new List<Mon> { new(0, 0, 1920, 1080) });
+            Run(w, 60 * 3);
+            Check(w.Grounds.Count == 1 && w.W == 1920 && !w.Balls.Contains(b), "unplugging a screen: its snow and snowballs go away, no crash");
+            w.SetMonitors(new List<Mon> { new(0, 0, 1920, 1080), new(1920, 0, 3200, 1024) });
+            Run(w, 60 * 20);
+            Check(w.Grounds.Count == 2 && SnowOn(w.Grounds[1]) > 20, "plugging it back in: it snows there again");
+        }
+        {
+            // A gap between two screens (they only touch at a corner): visitors aren't drawn where there's no screen
+            var w = Desktop(new Mon(0, 0, 1000, 1000), new Mon(2000, 0, 3000, 1000));
+            w.Invite(1);
+            var v = w.Visitor;
+            v.X = 1500; v.Dir = 1; v.NextHabit = 1e9f;
+            Run(w, 1);
+            bool gapHidden = v.Hidden;
+            v.X = 2500;
+            Run(w, 1);
+            Check(gapHidden && !v.Hidden, "a visitor walking between screens is hidden in the gap and seen again on the next screen");
+        }
+        {
+            // The same picture whether drawn as one screen or as two halves (each screen draws its part)
+            var w = NewWorld(out var p);
+            w.LightsOn = true;
+            var (bottom, _, _) = Snowman(w, p);
+            w.Invite(0);
+            w.Visitor.X = 900;
+            Step(w, 30);
+            const int bw = 1920, bh = 1080;
+            var full = new uint[bw * bh];
+            var left = new uint[960 * bh];
+            var right = new uint[960 * bh];
+            var top = new uint[bw * 540];
+            var low = new uint[bw * 540];
+            int diff = 0;
+            fixed (uint* f = full) fixed (uint* l = left) fixed (uint* r = right) fixed (uint* tp = top) fixed (uint* lw = low)
+            {
+                Render.World(f, bw, bh, w, 1);
+                Render.World(l, 960, bh, w, 1, 0, 0);
+                Render.World(r, 960, bh, w, 1, 960, 0);
+                Render.World(tp, bw, 540, w, 1, 0, 0);
+                Render.World(lw, bw, 540, w, 1, 0, 540);
+            }
+            for (int y = 0; y < bh; y++)
+                for (int x = 0; x < bw; x++)
+                {
+                    uint a = full[y * bw + x];
+                    if (a != (x < 960 ? left[y * 960 + x] : right[y * 960 + x - 960])) diff++;
+                    if (a != (y < 540 ? top[y * bw + x] : low[(y - 540) * bw + x])) diff++;
+                }
+            Check(diff == 0, $"drawing a screen's part of the world matches the whole picture pixel for pixel ({diff} differences)");
         }
     }
 

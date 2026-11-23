@@ -61,6 +61,7 @@ Everything above works on Windows too (the taskbar takes the Dock's place), plus
 - **Winter visitors.** Penguins, snow foxes and rabbits wander along the bottom of the screen and leave footprints. Hit one with a snowball: the penguin tumbles (and might throw one back), the fox leaps aside, the rabbit runs off to hide. They walk behind your windows, never over them
 - **Livelier snow.** Turning crystal flakes, a few sparkling ones, and gusts of wind
 - **Prettier fairy lights.** Glass bulbs that sparkle on and off, six color sets, six patterns, and snow that settles on the wires
+- **Every screen.** Snow falls on all your screens, drifts from an upper screen into a lower one, and snowballs and visitors cross from one to the next
 - **Stays out of the way.** The snow pauses while your screen is locked or the display is off, and hides while a fullscreen video, game or presentation is in front
 
 See [FEATURES.md](FEATURES.md) for the full list per platform.
@@ -95,7 +96,7 @@ Everything is in the ❄ menu in the system tray (bottom right, maybe behind the
 
 ## Known limitations
 
-- Only the main screen gets snow (both versions)
+- Mac: only the main screen gets snow. Windows covers every screen; with different display scaling per screen, snow is sized for the main screen
 - The Dock or taskbar only gets snow when it sits at the bottom of the screen
 - The Mac version doesn't have the Windows-only features listed above yet
 - Neither version is code-signed or notarized yet, so both show a warning the first time you open them

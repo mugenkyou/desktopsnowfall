@@ -93,6 +93,10 @@ Everything desktopsnowfall can do today, and on which platform.
 | Stops drawing while the display sleeps or the screen is locked | ✅ | ✅ |
 | Hides while a fullscreen video, game or presentation is in front | ➖ | ✅ |
 | Display scaling changes apply without a restart | ✅ | ✅ |
+| All screens get snow (side by side, stacked, left of or above the main screen, portrait) | ➖ (main screen only) | ✅ |
+| Snow falls from a screen into the one below it; snowballs and visitors cross between screens | ➖ | ✅ |
+| Each screen's own taskbar collects snow | ➖ | ✅ |
+| Screens plugged in or unplugged while running | ➖ | ✅ |
 | Performance: smooth (60 fps) or battery saver (30 fps); saves power when unplugged; slows down by itself on a slow machine | ➖ | ✅ |
 | Start with Windows / at login | ➖ | ✅ |
 | Version shown in the menu | ➖ | ✅ |
@@ -120,11 +124,12 @@ Everything desktopsnowfall can do today, and on which platform.
 
 - One source file per platform: `desktopsnowfall.swift` (SpriteKit) and `windows/Program.cs` (pure Win32 with its own small renderer). No extra packages.
 - Windows draws a frame without allocating memory. Heavy snow takes about 4 ms per frame at 1920×1080.
-- Windows has 127 automated checks (`cd windows/tests` then `dotnet run -c Release`) covering the simulation, physics, visitors and drawing.
+- Windows has 143 automated checks (`cd windows/tests` then `dotnet run -c Release`) covering the simulation, physics, visitors and drawing.
 
 ## Known limits
 
-- Only the main screen gets snow (both platforms).
+- macOS: only the main screen gets snow.
+- Windows, several screens with different display scaling: snow is sized for the main screen, so it looks a little bigger or smaller on the others.
 - The Dock or taskbar only gets snow when it sits at the bottom of the screen.
 - The Mac version can't start at login by itself yet.
 - Neither version is code-signed or notarized.
