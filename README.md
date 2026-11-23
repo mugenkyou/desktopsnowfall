@@ -59,7 +59,9 @@ cd desktopsnowfall/windows
 dotnet run -c Release
 ```
 
-Use the ❄ icon in the system tray to pause, pick the snow amount, switch the fairy lights on (or press `L` while the menu is open), clear the snow, see How to Play, or quit. You'll need the [.NET 8 SDK](https://dotnet.microsoft.com/download) (`winget install Microsoft.DotNet.SDK.8`).
+Use the ❄ icon in the system tray to pause, pick the snow amount, switch the fairy lights on (or press `L` while the menu is open), clear the snow, see How to Play, or quit.
+
+**New on Windows:** snowballs now have weight. Big ones are slow to get going and roll on when you let go, they knock smaller ones flying, and they leave a trail in the snow. Knock a snowman and it wobbles, hit it harder and its carrot nose flies off, or bowl it over with a big one. Under ❄ → **Snowballs** you can pick the size (Normal, Large, Giant or Experimental), how many can exist at once, and switch the trails and the falling nose on or off. These are coming to the Mac version next. You'll need the [.NET 8 SDK](https://dotnet.microsoft.com/download) (`winget install Microsoft.DotNet.SDK.8`).
 
 ## Make it yours 🎨
 
