@@ -37,8 +37,21 @@ static class Cfg
     public const float InFrontFraction = 0.4f;     // share of the smallest layer that falls in front
     public const int FrameMs = 16;                 // timer interval (~60 fps)
     public const float BallStartRadius = 3;        // a new snowball starts this small
-    public const float BallMaxRadius = 28;         // and stops growing at this size
-    public const int MaxBalls = 20;                // oldest resting snowballs are removed beyond this
+    public static int GrowthMode = 0;              // 0 Normal, 1 Large, 2 Giant, 3 Experimental (tray menu)
+    public static readonly string[] GrowthNames = { "Normal", "Large", "Giant", "Experimental" };
+    static readonly float[] GrowthRadius = { 28, 42, 70 };   // Normal, Large (1.5×), Giant (2.5×)
+    public static float ExperimentalMaxRadius = 100;         // Experimental limit (registry), still screen-bounded
+    public static int MaxBalls = 20;               // oldest resting snowballs are removed beyond this
+
+    // Largest snowball allowed on a w × h screen: always finite, and never more than a small share of the
+    // screen's shorter side, so even an Experimental ball can't bury the desktop
+    public static float MaxRadius(float w, float h)
+    {
+        bool exp = GrowthMode == 3;
+        float screenCap = MathF.Max(BallStartRadius + 1, MathF.Min(w, h) * (exp ? 0.12f : 0.09f));
+        float want = exp ? ExperimentalMaxRadius : GrowthRadius[Math.Clamp(GrowthMode, 0, 2)];
+        return Math.Clamp(want, BallStartRadius + 1, screenCap);
+    }
     public const float LightSpacing = 22;          // distance between fairy light bulbs
     public const float LightSpan = 120;            // distance between the points where the wire is "hooked"
     public const float LightSag = 9;               // how far the wire droops between hooks
@@ -152,6 +165,7 @@ sealed class Snowball
     public Snowball Below;           // the ball it is stacked on (snowman), if any
     public bool Falling, Dragging, Hidden;
     public int Decor;                // 0 none, 1 snowman body, 2 snowman head
+    public float MaxedAt = -1;       // when it reached its size limit (for the little "full size" flash)
     public readonly (float Ang, float Dist, float Size, float Alpha)[] Specks = new (float, float, float, float)[20];
 
     public Snowball()
@@ -266,6 +280,7 @@ sealed class SnowWorld
     public bool GroundIsTaskbar;
     float pollAcc, t;
     public float T => t;
+    float ballMax = Cfg.MaxRadius(1920, 1080);   // snowball size limit for this screen, refreshed every frame
     const long GroundId = -2;
 
     public readonly List<Snowball> Balls = new();
@@ -390,6 +405,7 @@ sealed class SnowWorld
     public void Update(float dt, Func<List<Win>> readWindows, Func<float?> readTaskbarTop)
     {
         t += dt;
+        ballMax = Cfg.MaxRadius(W, H);
         pollAcc += dt;
         if (pollAcc >= Cfg.PollInterval)
         {
@@ -655,11 +671,11 @@ sealed class SnowWorld
     }
 
     // Roll a ball to newX: it picks up snow from the columns it passes over and grows
-    static void Roll(Snowball b, Pile p, float newX)
+    void Roll(Snowball b, Pile p, float newX)
     {
         float moved = newX - b.X;
         if (MathF.Abs(moved) <= 0.01f) return;
-        if (b.R < Cfg.BallMaxRadius)
+        if (b.R < ballMax)
         {
             float collected = 0;
             float from = MathF.Min(b.X, newX) - b.R * 0.8f, to = MathF.Max(b.X, newX) + b.R * 0.8f;
@@ -678,7 +694,8 @@ sealed class SnowWorld
             }
             // Ball area grows by the snow area it picked up
             float area = MathF.PI * b.R * b.R + collected * Cfg.ColW * 0.8f;
-            b.R = MathF.Min(Cfg.BallMaxRadius, MathF.Sqrt(area / MathF.PI));
+            b.R = MathF.Min(ballMax, MathF.Sqrt(area / MathF.PI));
+            if (b.R >= ballMax - 0.01f && b.MaxedAt < 0) Maxed(b);
         }
         b.X = newX;
         b.Rot += moved / b.R;
@@ -707,7 +724,25 @@ sealed class SnowWorld
         }
     }
 
-    void TrimBalls()
+    // Put a resting snowball on a surface (used by the self-tests)
+    public Snowball AddBall(Pile p, float x, float r)
+    {
+        var b = new Snowball { X = x, R = r, Pile = p };
+        b.Y = p.TopY - r + 1.5f;
+        Balls.Add(b);
+        TrimBalls();
+        return b;
+    }
+
+    // Full size: a one-time flash (drawn by Render) and a little puff of sparkly powder
+    void Maxed(Snowball b)
+    {
+        b.MaxedAt = t;
+        for (int k = 0; k < 8; k++)
+            SpawnClump(b.X + Rnd.F(-b.R, b.R) * 0.7f, b.Y - b.R * Rnd.F(0.6f, 1), Rnd.F(-60, 60), -Rnd.F(80, 160), -3);
+    }
+
+    public void TrimBalls()
     {
         while (Balls.Count > Cfg.MaxBalls)
         {
@@ -1059,7 +1094,7 @@ unsafe static class Render
              1, cr, cg, cb);
 
     // Snowball: lit from the top-left with a bluish shade at the bottom-right, plus specks that turn as it rolls
-    public static void Ball(uint* buf, int bw, int bh, Snowball ball, float s)
+    public static void Ball(uint* buf, int bw, int bh, Snowball ball, float s, float t)
     {
         float cx = ball.X * s, cy = ball.Y * s, R = ball.R * s;
         float hx = cx - 0.24f * R, hy = cy - 0.28f * R, er = 1.1f * R;
@@ -1085,6 +1120,13 @@ unsafe static class Render
         }
         if (ball.Decor == 2) Head(buf, bw, bh, cx, cy, R);
         else if (ball.Decor == 1) Body(buf, bw, bh, cx, cy, R);
+        // Reached full size: a soft ring that grows and fades (0.6 s)
+        float age = t - ball.MaxedAt;
+        if (ball.MaxedAt >= 0 && age < 0.6f)
+        {
+            float k = age / 0.6f;
+            Ring(buf, bw, bh, cx, cy, R + (2 + 10 * k) * s, 1.6f * s, 0.8f * (1 - k), 0.85f, 0.93f, 1);
+        }
     }
 
     // Snowman head: eyes, carrot nose, a smile and a red scarf
@@ -1198,9 +1240,9 @@ unsafe static class Render
         drawBalls.Clear();
         foreach (var b in w.Balls) if (!b.Hidden && b != w.DragBall) drawBalls.Add(b);
         drawBalls.Sort((u, v) => v.Y.CompareTo(u.Y));   // lower balls first, so a snowman's head sits on top
-        foreach (var b in drawBalls) Ball(buf, bw, bh, b, s);
+        foreach (var b in drawBalls) Ball(buf, bw, bh, b, s, w.T);
         foreach (var f in w.Flakes) if (!f.Clump && f.Layer == 2) Disc(buf, bw, bh, f.X * s, f.Y * s, f.Size * 1.1f * s, f.Alpha);
-        if (w.DragBall != null) Ball(buf, bw, bh, w.DragBall, s);
+        if (w.DragBall != null) Ball(buf, bw, bh, w.DragBall, s, w.T);
     }
 
     static readonly List<Snowball> drawBalls = new();
@@ -1253,7 +1295,10 @@ static unsafe class Program
     const uint MF_STRING = 0, MF_CHECKED = 8, MF_POPUP = 0x10, MF_SEPARATOR = 0x800;
     const uint TPM_RIGHTBUTTON = 0x2, TPM_RETURNCMD = 0x100;
     const int CMD_PAUSE = 1, CMD_CLEAR = 2, CMD_QUIT = 3, CMD_LIGHTS = 4, CMD_GUIDE = 5,
-              CMD_LIGHT = 10, CMD_MEDIUM = 11, CMD_HEAVY = 12;
+              CMD_LIGHT = 10, CMD_MEDIUM = 11, CMD_HEAVY = 12,
+              CMD_GROWTH = 20,      // + growth mode 0..3
+              CMD_MAXBALLS = 30;    // + index into MaxBallChoices
+    static readonly int[] MaxBallChoices = { 10, 20, 40 };
     const string RegKey = @"Software\desktopsnowfall";
 
     // --- structs
@@ -1390,6 +1435,7 @@ static unsafe class Program
         scale = dpi > 0 ? dpi / 96f : 1;
         screenDC = GetDC(IntPtr.Zero);
         CreateSurface();
+        LoadSettings();
         world = new SnowWorld(bw / scale, bh / scale) { LightsOn = ReadSetting("FairyLights") };   // off by default
 
         ShowWindow(overlay, SW_SHOWNOACTIVATE);
@@ -1578,6 +1624,17 @@ static unsafe class Program
         AppendMenuW(amount, MF_STRING | (Cfg.TargetFlakes == 260 ? MF_CHECKED : 0), (UIntPtr)CMD_MEDIUM, "Medium");
         AppendMenuW(amount, MF_STRING | (Cfg.TargetFlakes == 500 ? MF_CHECKED : 0), (UIntPtr)CMD_HEAVY, "Heavy");
         AppendMenuW(menu, MF_POPUP, (UIntPtr)(ulong)amount.ToInt64(), "Snow amount");
+        IntPtr balls = CreatePopupMenu();
+        for (int i = 0; i < 4; i++)
+        {
+            string name = i == 3 ? $"Experimental (up to {(int)Cfg.ExperimentalMaxRadius} px)" : Cfg.GrowthNames[i];
+            AppendMenuW(balls, MF_STRING | (Cfg.GrowthMode == i ? MF_CHECKED : 0), (UIntPtr)(uint)(CMD_GROWTH + i), name);
+        }
+        AppendMenuW(balls, MF_SEPARATOR, UIntPtr.Zero, null);
+        for (int i = 0; i < MaxBallChoices.Length; i++)
+            AppendMenuW(balls, MF_STRING | (Cfg.MaxBalls == MaxBallChoices[i] ? MF_CHECKED : 0), (UIntPtr)(uint)(CMD_MAXBALLS + i),
+                        $"At most {MaxBallChoices[i]} snowballs");
+        AppendMenuW(menu, MF_POPUP, (UIntPtr)(ulong)balls.ToInt64(), "&Snowballs");
         AppendMenuW(menu, MF_STRING | (world.LightsOn ? MF_CHECKED : 0), (UIntPtr)CMD_LIGHTS, "Fairy &Lights ✨");
         AppendMenuW(menu, MF_STRING, (UIntPtr)CMD_CLEAR, "&Clear snow");
         AppendMenuW(menu, MF_STRING, (UIntPtr)CMD_GUIDE, "&How to Play ❔");
@@ -1607,6 +1664,15 @@ static unsafe class Program
                 break;
             case CMD_GUIDE: ShowGuide(); break;
             case CMD_QUIT: Quit(); break;
+            case >= CMD_GROWTH and < CMD_GROWTH + 4:
+                Cfg.GrowthMode = cmd - CMD_GROWTH;
+                WriteInt("GrowthMode", Cfg.GrowthMode);
+                break;
+            case >= CMD_MAXBALLS and < CMD_MAXBALLS + 3:
+                Cfg.MaxBalls = MaxBallChoices[cmd - CMD_MAXBALLS];
+                WriteInt("MaxBalls", Cfg.MaxBalls);
+                world.TrimBalls();
+                break;
         }
     }
 
@@ -1625,17 +1691,29 @@ static unsafe class Program
         MessageBoxW(IntPtr.Zero, text, "Welcome to desktopsnowfall ❄️", MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST);
     }
 
-    static bool ReadSetting(string name)
+    // Settings live in HKCU\Software\desktopsnowfall; values from the registry are clamped to sane ranges
+    static void LoadSettings()
     {
-        using var k = Registry.CurrentUser.OpenSubKey(RegKey);
-        return k?.GetValue(name) is int v && v != 0;
+        Cfg.GrowthMode = Math.Clamp(ReadInt("GrowthMode", 0), 0, 3);
+        Cfg.ExperimentalMaxRadius = Math.Clamp(ReadInt("ExperimentalMaxRadius", 100), 4, 1000);
+        int mb = ReadInt("MaxBalls", 20);
+        Cfg.MaxBalls = Array.IndexOf(MaxBallChoices, mb) >= 0 ? mb : 20;
     }
 
-    static void WriteSetting(string name, bool on)
+    static int ReadInt(string name, int def)
+    {
+        using var k = Registry.CurrentUser.OpenSubKey(RegKey);
+        return k?.GetValue(name) is int v ? v : def;
+    }
+
+    static void WriteInt(string name, int value)
     {
         using var k = Registry.CurrentUser.CreateSubKey(RegKey);
-        k.SetValue(name, on ? 1 : 0, RegistryValueKind.DWord);
+        k.SetValue(name, value, RegistryValueKind.DWord);
     }
+
+    static bool ReadSetting(string name) => ReadInt(name, 0) != 0;
+    static void WriteSetting(string name, bool on) => WriteInt(name, on ? 1 : 0);
 
     static void Quit()
     {

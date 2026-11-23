@@ -58,6 +58,7 @@ static unsafe class SelfTest
     static void Main()
     {
         Baseline();
+        Limits();
         Console.WriteLine(fails == 0 ? "\nAll checks passed." : $"\n{fails} check(s) failed.");
         Environment.Exit(fails == 0 ? 0 : 1);
     }
@@ -81,6 +82,39 @@ static unsafe class SelfTest
         Check(sa == Snapshot(b), "simulation is deterministic for a fixed seed");
 
         RenderChecks(a);
+    }
+
+    // A + B: growth modes, screen-aware limits, full-size feedback, snowball count limit
+    static void Limits()
+    {
+        float[] expect = { 28, 42, 70, 100 };
+        for (int mode = 0; mode < 4; mode++)
+        {
+            Cfg.GrowthMode = mode;
+            var w = NewWorld(out var p);
+            float last = -1;
+            for (int pass = 0; pass < 80 && Biggest(w) > last + 0.01f; pass++) { last = Biggest(w); SweepMouse(w, p, 1); }
+            float r = Biggest(w);
+            Snowball big = null;
+            foreach (var b in w.Balls) if (b.R == r) big = b;
+            Check(r <= expect[mode] + 0.01f && r >= expect[mode] - 0.5f,
+                  $"{Cfg.GrowthNames[mode]} mode grows to its limit and no further (r = {r:0.0}, limit {expect[mode]})");
+            Check(big != null && big.MaxedAt >= 0, $"{Cfg.GrowthNames[mode]}: reaching the limit triggers the full-size flash");
+        }
+        Cfg.GrowthMode = 3;
+        Cfg.ExperimentalMaxRadius = 10000;
+        Check(Cfg.MaxRadius(1920, 1080) <= 1080 * 0.12f + 0.01f, $"Experimental 10000 px is held to 12% of the screen ({Cfg.MaxRadius(1920, 1080):0} px)");
+        Cfg.ExperimentalMaxRadius = 100;
+        Cfg.GrowthMode = 2;
+        Check(Cfg.MaxRadius(800, 600) <= 600 * 0.09f + 0.01f, $"Giant on an 800x600 screen is held to 9% ({Cfg.MaxRadius(800, 600):0} px)");
+        Cfg.GrowthMode = 0;
+        Check(Cfg.MaxRadius(1920, 1080) == 28, "Normal keeps the original 28 px limit");
+
+        Cfg.MaxBalls = 10;
+        var m = NewWorld(out var mp);
+        for (int i = 0; i < 25; i++) m.AddBall(mp, 250 + i * 40, 8);
+        Check(m.Balls.Count == 10, $"max snowball count is respected ({m.Balls.Count} of 10)");
+        Cfg.MaxBalls = 20;
     }
 
     static string Snapshot(SnowWorld w)
