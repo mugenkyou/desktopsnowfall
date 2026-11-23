@@ -1,0 +1,70 @@
+name: Release
+
+# Push a tag like v1.2.0 to build everything and create a DRAFT GitHub release with the downloads and
+# their SHA-256 checksums. Nothing is published until you review the draft and press "Publish".
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows builds
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Self-tests
+        run: dotnet run -c Release --project windows/tests/desktopsnowfall.tests.csproj
+      - name: Publish x64 and arm64
+        run: |
+          $v = "${{ github.ref_name }}".TrimStart('v')
+          foreach ($rid in 'win-x64', 'win-arm64') {
+            dotnet publish windows/desktopsnowfall.csproj -c Release -r $rid --self-contained `
+              -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:Version=$v -o out/$rid
+            Compress-Archive -Path out/$rid/desktopsnowfall.exe -DestinationPath "desktopsnowfall-$rid-v$v.zip"
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: desktopsnowfall-win-*.zip
+
+  macos:
+    name: macOS build
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build universal .app (ad-hoc signed, not notarized)
+        run: zsh make_app.sh "${GITHUB_REF_NAME#v}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*.zip
+
+  draft:
+    name: Draft release
+    needs: [windows, macos]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: files
+          merge-multiple: true
+      - name: Checksums
+        working-directory: files
+        run: sha256sum *.zip | tee SHA256SUMS.txt
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "$GITHUB_REF_NAME" files/* --repo "$GITHUB_REPOSITORY" --draft
+          --title "desktopsnowfall $GITHUB_REF_NAME" --generate-notes
