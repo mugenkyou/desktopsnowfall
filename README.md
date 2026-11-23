@@ -67,4 +67,4 @@ Every setting lives at the top of `desktopsnowfall.swift` (`enum Cfg`): how many
 
 ## License
 
-[MIT](LICENSE) · Made with 💙 and a little help from Claude
+[MIT](LICENSE)
