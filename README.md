@@ -61,7 +61,15 @@ dotnet run -c Release
 
 Use the ❄ icon in the system tray to pause, pick the snow amount, switch the fairy lights on (or press `L` while the menu is open), clear the snow, see How to Play, or quit.
 
-**New on Windows:** snowballs now have weight. Big ones are slow to get going and roll on when you let go, they knock smaller ones flying, and they leave a trail in the snow. Knock a snowman and it wobbles, hit it harder and its carrot nose flies off, or bowl it over with a big one. Under ❄ → **Snowballs** you can pick the size (Normal, Large, Giant or Experimental), how many can exist at once, and switch the trails and the falling nose on or off. These are coming to the Mac version next. You'll need the [.NET 8 SDK](https://dotnet.microsoft.com/download) (`winget install Microsoft.DotNet.SDK.8`).
+**New on Windows** (coming to the Mac version next):
+
+- **Snowballs have weight.** Big ones are slow to get going and roll on when you let go, they knock smaller ones flying, and they leave a trail in the snow
+- **Snowmen react.** Knock one and it wobbles, hit it harder and its carrot nose flies off, or bowl it over with a big snowball
+- **Right-click a snowball to break it.** A left click only picks it up; set it down gently and it stays a snowball
+- **Winter visitors.** Now and then a penguin, a snow fox or a rabbit wanders along the bottom of the screen and leaves footprints in the snow. They walk behind your windows, never over them
+- **Livelier snow.** Some flakes are little turning crystals, a few sparkle, and now and then a gust of wind sweeps through
+
+Everything can be switched on or off from the ❄ tray menu: **Snow** (amount, gusts, crystal flakes), **Snowballs** (size: Normal, Large, Giant or Experimental; how many; trails; falling nose) and **Visitors** (each animal, or invite one now). You'll need the [.NET 8 SDK](https://dotnet.microsoft.com/download) (`winget install Microsoft.DotNet.SDK.8`).
 
 ## Make it yours 🎨
 
