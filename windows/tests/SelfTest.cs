@@ -407,8 +407,18 @@ static unsafe class SelfTest
     {
         {
             var w = NewWorld(out _);
-            Step(w, 60 * 30);
-            Check(w.Visitor == null, "visitors are rare: nobody shows up in the first 30 s");
+            int first = -1, most = 0, arrivals = 0, last = 0;
+            for (int i = 0; i < 60 * 300; i++)
+            {
+                Step(w, 1);
+                if (first < 0 && w.Visitors.Count > 0) first = i;
+                most = Math.Max(most, w.Visitors.Count);
+                if (w.Visitors.Count > last) arrivals += w.Visitors.Count - last;
+                last = w.Visitors.Count;
+            }
+            Check(first > 0 && first <= 60 * 16, $"the first visitor arrives soon ({first / 60f:0} s)");
+            Check(arrivals >= 8, $"visitors come often ({arrivals} in 5 minutes)");
+            Check(most >= 2 && most <= Cfg.MaxVisitors, $"several can be about at once, never more than {Cfg.MaxVisitors} (most seen: {most})");
         }
         for (int kind = 0; kind < 3; kind++)
         {
@@ -419,7 +429,7 @@ static unsafe class SelfTest
             float lo = v.X, hi = v.X;
             bool hiddenOnOpenGround = false;
             int frames = 0;
-            while (w.Visitor == v && frames < 60 * 240)
+            while (w.Visitors.Contains(v) && frames < 60 * 240)
             {
                 Step(w, 1); frames++;
                 lo = MathF.Min(lo, v.X); hi = MathF.Max(hi, v.X);
@@ -427,7 +437,7 @@ static unsafe class SelfTest
             }
             int prints = 0;
             foreach (var m in w.Marks) if (m.Pile == w.Ground) prints++;
-            Check(w.Visitor == null && hi - lo > 1000, $"{Cfg.VisitorNames[kind]} wanders across and leaves ({frames / 60} s, {hi - lo:0} px)");
+            Check(!w.Visitors.Contains(v) && hi - lo > 1000, $"{Cfg.VisitorNames[kind]} wanders across and leaves ({frames / 60} s, {hi - lo:0} px)");
             Check(prints > 20, $"{Cfg.VisitorNames[kind]} leaves footprints in the snow ({prints})");
             Check(!hiddenOnOpenGround, $"{Cfg.VisitorNames[kind]} is visible on open ground");
         }
@@ -458,6 +468,7 @@ static unsafe class SelfTest
                     w.SendAway();
                     w.Invite(kind);
                     w.Visitor.X = 900;
+                    w.Visitor.Dir = 1;
                     Step(w, 2);
                     Render.World(px, bw, bh, w, 1);
                     long before = GC.GetAllocatedBytesForCurrentThread();
@@ -562,8 +573,15 @@ static unsafe class SelfTest
             for (int i = 0; i < 10; i++) { w.MouseX -= 8; w.MouseY += 5; Step(w, 1); }   // pull back down-left
             bool stayed = MathF.Abs(b.X - x0) < 0.01f && MathF.Abs(b.Y - y0) < 0.01f;
             int path = w.PathCount;
+            if (Environment.GetEnvironmentVariable("SNOW_PNG_DIR") != null)
+            {
+                var img = new uint[1920 * 1080];
+                fixed (uint* px = img) Render.World(px, 1920, 1080, w, 1);
+                Png(img, 1920, 1080, 380, 200, 400, 260, "aim-guide.png");
+            }
             w.EndDrag();
             w.AimKey = false;
+            Check(w.SlingUsed, "using the slingshot is noticed (so the Shift tip stops showing)");
             Check(stayed && path > 5, "Shift-aiming: the ball stays put while you pull back, with a dotted guide");
             Check(b.Thrown && b.Vx > 0 && b.Vy < 0, $"letting go launches it the other way, like a slingshot ({b.Vx:0}, {b.Vy:0})");
         }
@@ -772,21 +790,33 @@ static unsafe class SelfTest
             var bulbs = new Bulb[8];
             Rnd.Seed(3);
             for (int i = 0; i < bulbs.Length; i++) bulbs[i] = new Bulb();
+            float blinkLo = 1, blinkHi = 0, blinkWorst = 0, glints = 0;
             for (int pat = 0; pat < LightLook.PatternNames.Length; pat++)
                 for (int i = 0; i < bulbs.Length; i++)
                 {
                     float last = LightLook.Brightness(pat, bulbs[i], i, 0);
                     for (int f = 1; f < 60 * 30; f++)
                     {
-                        float k = LightLook.Brightness(pat, bulbs[i], i, f * Dt);
-                        bounded &= k >= 0.3f && k <= 1.15f;
-                        worst = MathF.Max(worst, MathF.Abs(k - last));
+                        float k = LightLook.Brightness(pat, bulbs[i], i, f * Dt), d = MathF.Abs(k - last);
                         last = k;
+                        if (pat == 5)
+                        {
+                            blinkLo = MathF.Min(blinkLo, k); blinkHi = MathF.Max(blinkHi, k);
+                            blinkWorst = MathF.Max(blinkWorst, d);
+                            if (LightLook.Glint(pat, bulbs[i], i, f * Dt) > 0.5f) glints++;
+                            continue;
+                        }
+                        bounded &= k >= 0.3f && k <= 1.15f;
+                        worst = MathF.Max(worst, d);
                     }
                 }
             smooth = worst < 0.08f;
-            Check(bounded, "every light pattern stays between soft and bright (never off, never glaring)");
-            Check(smooth, $"no pattern flickers: the biggest change in one frame is {worst:0.000}");
+            Check(bounded, "the steady light patterns stay between soft and bright (never off, never glaring)");
+            Check(smooth, $"no steady pattern flickers: the biggest change in one frame is {worst:0.000}");
+            Check(blinkLo < 0.15f && blinkHi > 1, $"\"sparkle on & off\" really goes off and on ({blinkLo:0.00} .. {blinkHi:0.00})");
+            Check(blinkWorst < 0.2f, $"...with soft fades, not a hard flicker (biggest step per frame {blinkWorst:0.00})");
+            Check(glints > 100, $"lit bulbs flash a star-shaped glint now and then ({glints / 60f:0} bulb-seconds in 30 s)");
+            Check(Cfg.LightPattern == 5, "sparkle on & off is the default pattern");
             float mean = 0, sq = 0;
             for (int i = 0; i < bulbs.Length; i++) { float k = LightLook.Brightness(0, bulbs[i], i, 5); mean += k; sq += k * k; }
             mean /= bulbs.Length;
@@ -842,7 +872,7 @@ static unsafe class SelfTest
                         long before = GC.GetAllocatedBytesForCurrentThread();
                         Render.World(px, bw, bh, w, 1);
                         alloc += GC.GetAllocatedBytesForCurrentThread() - before;
-                        if (pat == 0) Png(buf, bw, bh, 400, 395, 200, 40, $"lights-{pre}.png");
+                        if (pat == 5) Png(buf, bw, bh, 400, 395, 200, 40, $"lights-{pre}.png");
                     }
                 Cfg.LightPreset = Cfg.LightPattern = 0;
                 var sw = Stopwatch.StartNew();

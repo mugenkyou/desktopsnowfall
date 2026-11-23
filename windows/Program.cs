@@ -58,8 +58,9 @@ static class Cfg
     public static bool FancyFlakes = true;         // some near flakes are six-armed crystals, a few sparkle (tray menu)
     public static readonly bool[] Visitors = { true, true, true };   // penguin, snow fox, rabbit (tray menu)
     public static readonly string[] VisitorNames = { "Penguin", "Snow fox", "Rabbit" };
-    public const float FirstVisit = 40;            // the first visitor comes after this long (s)
-    public const float VisitGapMin = 60, VisitGapMax = 150;   // then one every 1-2.5 minutes
+    public const float FirstVisit = 15;            // the first visitor comes after this long (s)
+    public const float VisitGapMin = 15, VisitGapMax = 40;    // then another every 15-40 s (sometimes two together)
+    public const int MaxVisitors = 4;              // at most this many wandering about at once
     public const float ThrowSpeed = 450;           // letting go faster than this (px/s) throws; slower just sets the ball down
     public const float ThrowMax = 1800;            // fastest throw (px/s)
     public const float SlingGain = 6;              // Shift-aiming: launch speed (px/s) per px the mouse is pulled back
@@ -81,7 +82,7 @@ static class Cfg
     public const float BulbGlow = 19;              // size of a bulb's soft glow
     public const float BulbCore = 5.5f;            // size of a bulb's bright center
     public static int LightPreset = 0;             // colors: see LightLook.PresetNames (tray menu)
-    public static int LightPattern = 0;            // animation: see LightLook.PatternNames (tray menu)
+    public static int LightPattern = 5;            // animation: see LightLook.PatternNames (tray menu); 5 = sparkle on & off
     public static bool WireSnow = true;            // snow slowly settles on the wires and shakes off (tray menu)
 }
 
@@ -334,7 +335,8 @@ sealed class LightString
 static class LightLook
 {
     public static readonly string[] PresetNames = { "Classic Christmas", "Warm White", "Arctic Blue", "Candy Colors", "Rainbow", "Golden Christmas" };
-    public static readonly string[] PatternNames = { "Gentle twinkle", "Slow breathing", "Cascade", "Alternating", "Festive sparkle" };
+    public static readonly string[] PatternNames = { "Gentle twinkle", "Slow breathing", "Cascade", "Alternating", "Festive sparkle", "Sparkle on && off" };
+    public static readonly int[] MenuOrder = { 5, 0, 1, 2, 3, 4 };   // the favorite first
 
     static readonly (float R, float G, float B)[][] Palettes =
     {
@@ -385,11 +387,28 @@ static class LightLook
                 if (Hash(i, n) < 0.12f) k += 0.38f * MathF.Sin(MathF.PI * (slot - n));
                 break;
             }
+            case 5:                                          // each bulb blinks on and off on its own rhythm, with soft fades
+                k = 0.08f + 1.02f * On(b, t);
+                return Math.Clamp(k, 0.05f, 1.15f);
             default:                                         // gentle, irregular twinkle (two unrelated waves)
                 k = b.Base * (0.8f + 0.12f * MathF.Sin(t * b.Speed + b.Phase) + 0.08f * MathF.Sin(t * b.Speed2 * 1.618f + b.Phase2));
                 break;
         }
         return Math.Clamp(k, 0.3f, 1.15f);
+    }
+
+    // 0 = off, 1 = on, with a quick smooth fade between (about a fifth of a second)
+    static float On(Bulb b, float t)
+    {
+        float x = Math.Clamp(MathF.Sin(t * b.Speed * 1.3f + b.Phase) * 2 + 0.6f, -0.5f, 0.5f) + 0.5f;   // on ~60% of the time
+        return x * x * (3 - 2 * x);
+    }
+
+    // A star-shaped glint on a lit bulb now and then (0 = none, 1 = full)
+    public static float Glint(int pattern, Bulb b, int i, float t)
+    {
+        float burst = MathF.Pow(MathF.Max(0, MathF.Sin(t * b.Speed2 * 2.1f + b.Phase2 + i)), 10);
+        return pattern == 5 ? On(b, t) * burst : MathF.Max(0, Brightness(pattern, b, i, t) - 0.85f) / 0.3f * burst;
     }
 
     static float Hash(int i, int n)
@@ -430,9 +449,10 @@ sealed class SnowWorld
     public Snowball DragBall => dragBall;
     public float MouseX, MouseY;                 // cursor, set by the caller every frame
     public bool AimKey;                          // Shift held: slingshot aiming (set by the caller)
+    public bool SlingUsed;                       // the slingshot has been used (then the tip isn't needed)
     bool aiming;
     float aimX, aimY, launchVx, launchVy;
-    public readonly float[] Path = new float[48];   // predicted flight of the ball being thrown: x, y pairs
+    public readonly float[] Path = new float[96];   // predicted flight (1.6 s) of the ball being thrown: x, y pairs
     public int PathCount;
     float lastMx = float.NaN, dragOffX, dragOffY, dragVx, dragVy;
 
@@ -572,7 +592,7 @@ sealed class SnowWorld
             pollAcc = 0;
         }
         StepFlakes(dt);
-        StepVisitor(dt);
+        StepVisitors(dt);
         if (dragBall != null) StepDrag(dragBall, dt); else UpdateRolling(dt);
         StepBalls(dt);
         if (LightsOn)
@@ -767,6 +787,7 @@ sealed class SnowWorld
         PathCount = 0;
         bool sling = aiming;
         aiming = false;
+        SlingUsed |= sling;
         if (sling || dragVx * dragVx + dragVy * dragVy > Cfg.ThrowSpeed * Cfg.ThrowSpeed)
         {
             var (vx, vy) = sling ? Launch(b, launchVx, launchVy) : Launch(b, dragVx, dragVy);
@@ -841,7 +862,7 @@ sealed class SnowWorld
         b.ThrownBy = by;
     }
 
-    // Trace the first 0.8 s of a throw (same gravity and surfaces as the real flight), for the dotted guide
+    // Trace the first 1.6 s of a throw (same gravity and surfaces as the real flight), for the dotted guide
     void Predict(float x, float y, float r, float vx, float vy)
     {
         PathCount = 0;
@@ -871,9 +892,9 @@ sealed class SnowWorld
     // A thrown snowball bursts on the first thing it meets: a visitor, a snowball or snowman, or a window
     bool ThrownHit(Snowball b, float px, float py)
     {
-        var v = Visitor;
-        if (v != null && b.ThrownBy != v && VisitorHit(v, b))
+        foreach (var v in Visitors)
         {
+            if (b.ThrownBy == v || !VisitorHit(v, b)) continue;   // (the penguin's throw can hit the others)
             Puff(b.X, b.Y, b.R, b.Vx * 0.2f);
             HitVisitor(v, b);
             return true;
@@ -1118,14 +1139,15 @@ sealed class SnowWorld
 
     // MARK: Visitors
 
-    public Visitor Visitor;
+    public readonly List<Visitor> Visitors = new();
+    public Visitor Visitor => Visitors.Count > 0 ? Visitors[0] : null;   // the first one (handy in tests)
     float visitAt = Cfg.FirstVisit;
     public int VisitorHits;          // snowballs that have hit a visitor
 
-    // Send in a visitor now (kind -1: any enabled one). Only one at a time.
+    // Send in a visitor now (kind -1: any enabled one), if there's room for one more
     public bool Invite(int kind = -1)
     {
-        if (Visitor != null) return false;
+        if (Visitors.Count >= Cfg.MaxVisitors) return false;
         if (kind < 0)
         {
             int n = 0;
@@ -1136,21 +1158,28 @@ sealed class SnowWorld
         }
         else if (!Cfg.Visitors[kind]) return false;
         bool fromLeft = Rnd.F(0, 1) < 0.5f;
-        Visitor = new Visitor { Kind = kind, Dir = fromLeft ? 1 : -1, X = fromLeft ? -30 : W + 30, NextHabit = t + Rnd.F(6, 14) };
+        float queue = 45 * Visitors.Count;           // arriving together: one a little behind the other
+        Visitors.Add(new Visitor { Kind = kind, Dir = fromLeft ? 1 : -1, X = fromLeft ? -30 - queue : W + 30 + queue,
+                                   NextHabit = t + Rnd.F(6, 14) });
         return true;
     }
 
-    public void SendAway() { Visitor = null; visitAt = t + Rnd.F(Cfg.VisitGapMin, Cfg.VisitGapMax); }
+    public void SendAway() { Visitors.Clear(); visitAt = t + Rnd.F(Cfg.VisitGapMin, Cfg.VisitGapMax); }
 
-    void StepVisitor(float dt)
+    void StepVisitors(float dt)
     {
-        if (Visitor == null)
+        if (t >= visitAt)
         {
-            if (t >= visitAt && !Invite()) visitAt = t + 10;   // nobody enabled: look again later
-            return;
+            int n = Rnd.F(0, 1) < 0.35f ? 2 : 1;     // sometimes a pair turns up
+            for (int k = 0; k < n; k++) Invite();
+            visitAt = t + Rnd.F(Cfg.VisitGapMin, Cfg.VisitGapMax);
         }
-        var v = Visitor;
-        if (!Cfg.Visitors[v.Kind]) { SendAway(); return; }
+        for (int i = Visitors.Count - 1; i >= 0; i--) StepVisitor(Visitors[i], dt);
+    }
+
+    void StepVisitor(Visitor v, float dt)
+    {
+        if (!Cfg.Visitors[v.Kind]) { Visitors.Remove(v); return; }
         v.Anim += dt;
         v.Cool -= dt;
         v.Hurry -= dt;
@@ -1188,7 +1217,7 @@ sealed class SnowWorld
             v.HopT = -1;
             v.X = v.X < 0 ? -30 : W + 30;
         }
-        else if ((v.Dir > 0 && v.X > W + 40) || (v.Dir < 0 && v.X < -40)) SendAway();
+        else if ((v.Dir > 0 && v.X > W + 40 + 45 * Cfg.MaxVisitors) || (v.Dir < 0 && v.X < -40 - 45 * Cfg.MaxVisitors)) Visitors.Remove(v);
     }
 
     // Ordinary wandering, with each animal's own habits
@@ -2222,8 +2251,22 @@ unsafe static class Render
                 float k = LightLook.Brightness(Cfg.LightPattern, b, i, t) * ls.Reveal(i, t);   // 0 until it lights up
                 var c = LightLook.Color(Cfg.LightPreset, i, t);
                 Bulb(buf, bw, bh, b.X * s, b.Y * s, s, k, c.R, c.G, c.B, snow);
+                float g = LightLook.Glint(Cfg.LightPattern, b, i, t) * ls.Reveal(i, t);
+                if (g > 0.03f) Star(buf, bw, bh, b.X * s, (b.Y + 0.8f) * s, s, g, c.R, c.G, c.B);
             }
         }
+    }
+
+    // A four-pointed sparkle: long thin rays across, short ones on the diagonals, white at the heart
+    static void Star(uint* buf, int bw, int bh, float x, float y, float s, float g, float r, float gr, float b)
+    {
+        float len = (5 + 6 * g) * s, d = len * 0.45f, wd = 0.8f * s;
+        float wr = r + (1 - r) * 0.7f, wg = gr + (1 - gr) * 0.7f, wb = b + (1 - b) * 0.7f;
+        Line(buf, bw, bh, x - len, y, x + len, y, wd, 0.85f * g, wr, wg, wb);
+        Line(buf, bw, bh, x, y - len, x, y + len, wd, 0.85f * g, wr, wg, wb);
+        Line(buf, bw, bh, x - d, y - d, x + d, y + d, wd * 0.8f, 0.5f * g, wr, wg, wb);
+        Line(buf, bw, bh, x - d, y + d, x + d, y - d, wd * 0.8f, 0.5f * g, wr, wg, wb);
+        Disc(buf, bw, bh, x, y, 2.6f * s, 0.9f * g, 1, 1, 1);
     }
 
     // One glass bulb: a faint pool of colored light below it, a soft bloom, the socket, the glass itself
@@ -2289,7 +2332,7 @@ unsafe static class Render
         foreach (var p in w.Piles.Values) Pile(buf, bw, bh, p, s);
         Pile(buf, bw, bh, w.Ground, s);
         Trails(buf, bw, bh, w, s);
-        if (w.Visitor != null) Visitor(buf, bw, bh, w.Visitor, s);
+        foreach (var v in w.Visitors) Visitor(buf, bw, bh, v, s);
         Lights(buf, bw, bh, w, s);
         foreach (var f in w.Flakes) if (f.Clump) Disc(buf, bw, bh, f.X * s, f.Y * s, f.Size * 1.1f * s, f.Alpha);
         drawBalls.Clear();
@@ -2300,9 +2343,20 @@ unsafe static class Render
         foreach (var f in w.Flakes) if (!f.Clump && f.Layer == 2) Flake(buf, bw, bh, f, s, w.T);
         if (w.DragBall != null)
         {
-            for (int i = 0; i < w.PathCount; i++)      // dotted guide of where a throw would go
-                Circle(buf, bw, bh, w.Path[2 * i] * s, w.Path[2 * i + 1] * s, 1.6f * s,
-                       0.5f * (1 - (float)i / (w.Path.Length / 2)), 0.85f, 0.92f, 1);
+            // Dotted guide of where a throw would go: bright dots with a dark rim (visible on light and dark
+            // backgrounds), fading along the path, and a ring where it would land
+            for (int i = 0; i < w.PathCount; i++)
+            {
+                float x = w.Path[2 * i] * s, y = w.Path[2 * i + 1] * s, a = 1 - 0.6f * i / (w.Path.Length / 2);
+                Circle(buf, bw, bh, x, y, 3.1f * s, 0.45f * a, 0.08f, 0.12f, 0.28f);
+                Circle(buf, bw, bh, x, y, 2.2f * s, 0.95f * a, 0.9f, 0.96f, 1);
+            }
+            if (w.PathCount > 0)
+            {
+                float x = w.Path[2 * w.PathCount - 2] * s, y = w.Path[2 * w.PathCount - 1] * s;
+                Ring(buf, bw, bh, x, y, 6 * s, 2.6f * s, 0.4f, 0.08f, 0.12f, 0.28f);
+                Ring(buf, bw, bh, x, y, 6 * s, 1.5f * s, 0.9f, 0.9f, 0.96f, 1);
+            }
             Ball(buf, bw, bh, w.DragBall, s, w.T);
         }
     }
@@ -2353,7 +2407,7 @@ static unsafe class Program
     const int SW_HIDE = 0, SW_SHOWNOACTIVATE = 4;
     const uint ULW_ALPHA = 2;
     const int DWMWA_EXTENDED_FRAME_BOUNDS = 9, DWMWA_CLOAKED = 14;
-    const uint NIM_ADD = 0, NIM_DELETE = 2, NIF_MESSAGE = 1, NIF_ICON = 2, NIF_TIP = 4;
+    const uint NIM_ADD = 0, NIM_MODIFY = 1, NIM_DELETE = 2, NIF_MESSAGE = 1, NIF_ICON = 2, NIF_TIP = 4, NIF_INFO = 0x10, NIIF_INFO = 1;
     const uint MF_STRING = 0, MF_CHECKED = 8, MF_POPUP = 0x10, MF_SEPARATOR = 0x800;
     const uint TPM_RIGHTBUTTON = 0x2, TPM_RETURNCMD = 0x100;
     const int CMD_PAUSE = 1, CMD_CLEAR = 2, CMD_QUIT = 3, CMD_LIGHTS = 4, CMD_GUIDE = 5,
@@ -2469,6 +2523,7 @@ static unsafe class Program
     static double lastT;
     static bool paused;
     static bool catching;                     // overlay currently takes clicks (mouse is over a snowball)
+    static bool aimTipShown;                  // the "flick to throw, Shift to aim" tip, once per launch
     static readonly List<Win> found = new();
     static readonly StringBuilder clsName = new(64);
 
@@ -2555,10 +2610,19 @@ static unsafe class Program
                 if (hWnd == overlay) world.Smash(world.MouseX, world.MouseY);   // right click breaks a snowball
                 return IntPtr.Zero;
             case WM_LBUTTONDOWN:
-                if (hWnd == overlay && world.BeginDrag(world.MouseX, world.MouseY)) SetCapture(overlay);
+                if (hWnd == overlay && world.BeginDrag(world.MouseX, world.MouseY))
+                {
+                    SetCapture(overlay);
+                    if (!aimTipShown && !ReadSetting("UsedAim")) { aimTipShown = true; ShowAimTip(); }
+                }
                 return IntPtr.Zero;
             case WM_LBUTTONUP:
-                if (hWnd == overlay && world.DragBall != null) { world.EndDrag(); ReleaseCapture(); }
+                if (hWnd == overlay && world.DragBall != null)
+                {
+                    world.EndDrag();
+                    ReleaseCapture();
+                    if (world.SlingUsed && !ReadSetting("UsedAim")) WriteSetting("UsedAim", true);   // got it: no more tips
+                }
                 return IntPtr.Zero;
             case WM_CAPTURECHANGED:
                 if (hWnd == overlay) world.EndDrag();
@@ -2725,7 +2789,7 @@ static unsafe class Program
         for (int i = 0; i < LightLook.PresetNames.Length; i++)
             AppendMenuW(style, MF_STRING | (Cfg.LightPreset == i ? MF_CHECKED : 0), (UIntPtr)(uint)(CMD_PRESET + i), LightLook.PresetNames[i]);
         AppendMenuW(style, MF_SEPARATOR, UIntPtr.Zero, null);
-        for (int i = 0; i < LightLook.PatternNames.Length; i++)
+        foreach (int i in LightLook.MenuOrder)
             AppendMenuW(style, MF_STRING | (Cfg.LightPattern == i ? MF_CHECKED : 0), (UIntPtr)(uint)(CMD_PATTERN + i), LightLook.PatternNames[i]);
         AppendMenuW(style, MF_SEPARATOR, UIntPtr.Zero, null);
         AppendMenuW(style, MF_STRING | (Cfg.WireSnow ? MF_CHECKED : 0), (UIntPtr)CMD_WIRESNOW, "Snow on the wires");
@@ -2763,14 +2827,13 @@ static unsafe class Program
                 WriteSetting("Visitor" + (cmd - CMD_VISITOR), Cfg.Visitors[cmd - CMD_VISITOR]);
                 break;
             case CMD_INVITE:
-                world.SendAway();
-                world.Invite();
+                if (!world.Invite() && world.Visitors.Count > 0) { world.Visitors.RemoveAt(0); world.Invite(); }
                 break;
             case >= CMD_PRESET and < CMD_PRESET + 6:
                 Cfg.LightPreset = cmd - CMD_PRESET;
                 WriteInt("LightPreset", Cfg.LightPreset);
                 break;
-            case >= CMD_PATTERN and < CMD_PATTERN + 5:
+            case >= CMD_PATTERN and < CMD_PATTERN + 6:
                 Cfg.LightPattern = cmd - CMD_PATTERN;
                 WriteInt("LightPattern", Cfg.LightPattern);
                 break;
@@ -2806,6 +2869,17 @@ static unsafe class Program
         }
     }
 
+    // A small notification from the tray icon the first time a snowball is picked up
+    static void ShowAimTip()
+    {
+        var nid = TrayData();
+        nid.uFlags = NIF_INFO;
+        nid.dwInfoFlags = NIIF_INFO;
+        nid.szInfoTitle = "You've got a snowball ❄";
+        nid.szInfo = "Flick the mouse and let go to throw it.\nTo aim: hold Shift, pull back and let go, like a slingshot.\nRight-click a snowball to break it.";
+        Shell_NotifyIconW(NIM_MODIFY, ref nid);
+    }
+
     // The app has no window, so this is where people learn the tricks
     static void ShowGuide()
     {
@@ -2814,12 +2888,13 @@ static unsafe class Program
             "⚪  Roll a snowball: slide your mouse sideways over snow\n" +
             "🎳  Push it: roll one snowball into another\n" +
             "🖐️  Carry it: hold the left mouse button on a snowball and drag\n" +
-            "🎯  Throw it: carry it and flick the mouse (or hold Shift, pull back and let go)\n" +
+            "🎯  Throw it: carry it, flick the mouse and let go\n" +
+            "🏹  Aim it: carry it, hold Shift, pull the mouse back and let go (a dotted line shows the path)\n" +
             "💥  Break it: right-click a snowball\n" +
             "⛄  Build a snowman: stack three snowballs\n" +
             "🪟  Make snow fly: drag a window\n" +
             "✨  Hang fairy lights: ❄ tray icon → Fairy Lights\n" +
-            "🐧  Watch for visitors: a penguin, a snow fox or a rabbit drops by now and then.\n" +
+            "🐧  Watch for visitors: penguins, snow foxes and rabbits drop by, sometimes a few at once.\n" +
             "      Throw a snowball at one and see what it does!\n\n" +
             "Find everything under the ❄ icon in the system tray (bottom right).";
         MessageBoxW(IntPtr.Zero, text, "Welcome to desktopsnowfall ❄️", MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST);
@@ -2836,7 +2911,7 @@ static unsafe class Program
         Cfg.CarrotFalls = ReadInt("CarrotFalls", 1) != 0;
         Cfg.Gusts = ReadInt("Gusts", 1) != 0;
         Cfg.LightPreset = Math.Clamp(ReadInt("LightPreset", 0), 0, LightLook.PresetNames.Length - 1);
-        Cfg.LightPattern = Math.Clamp(ReadInt("LightPattern", 0), 0, LightLook.PatternNames.Length - 1);
+        Cfg.LightPattern = Math.Clamp(ReadInt("LightPattern", 5), 0, LightLook.PatternNames.Length - 1);
         Cfg.WireSnow = ReadInt("WireSnow", 1) != 0;
         for (int i = 0; i < Cfg.Visitors.Length; i++) Cfg.Visitors[i] = ReadInt("Visitor" + i, 1) != 0;
         Cfg.FancyFlakes = ReadInt("FancyFlakes", 1) != 0;
