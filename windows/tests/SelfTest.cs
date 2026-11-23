@@ -61,6 +61,7 @@ static unsafe class SelfTest
         Limits();
         Momentum();
         Trails();
+        Snowmen();
         Console.WriteLine(fails == 0 ? "\nAll checks passed." : $"\n{fails} check(s) failed.");
         Environment.Exit(fails == 0 ? 0 : 1);
     }
@@ -215,6 +216,103 @@ static unsafe class SelfTest
         SweepMouse(off, po, 1);
         Check(LiveMarks(off) == 0, "rolling trails can be switched off");
         Cfg.Trails = true;
+    }
+
+    // Carry a ball with the mouse (left button held) and let go just above another one
+    static void DragOnto(SnowWorld w, Snowball b, Snowball onto)
+    {
+        w.MouseX = b.X; w.MouseY = b.Y;
+        Check(w.BeginDrag(w.MouseX, w.MouseY), "a snowball can be picked up with the mouse");
+        float tx = onto.X, ty = onto.Y - onto.R - b.R - 4;
+        for (int i = 1; i <= 30; i++)
+        {
+            w.MouseX = b.X + (tx - b.X) * i / 30f;
+            w.MouseY = b.Y + (ty - b.Y) * i / 30f;
+            Step(w, 1);
+        }
+        w.EndDrag();
+        w.MouseX = w.MouseY = -999;
+    }
+
+    static (Snowball bottom, Snowball mid, Snowball head) Snowman(SnowWorld w, Pile p)
+    {
+        var bottom = w.AddBall(p, 700, 20);
+        var mid = w.AddBall(p, 400, 14);
+        var head = w.AddBall(p, 1000, 10);
+        DragOnto(w, mid, bottom);
+        DragOnto(w, head, mid);
+        Step(w, 30);
+        return (bottom, mid, head);
+    }
+
+    // Roll a ball into the snowman's base and watch for 3 s
+    static float Strike(SnowWorld w, Pile p, Snowball bottom, float r, float v)
+    {
+        var s = w.AddBall(p, bottom.X - bottom.R - r - 30, r);
+        s.Vx = v;
+        float maxLean = 0;
+        for (int i = 0; i < 180; i++) { Step(w, 1); maxLean = MathF.Max(maxLean, MathF.Abs(bottom.Wobble)); }
+        return maxLean;
+    }
+
+    // E: snowman interactions
+    static void Snowmen()
+    {
+        {
+            var w = Bare(out var p);
+            var (bottom, mid, head) = Snowman(w, p);
+            Check(mid.Below == bottom && head.Below == mid && mid.Decor == 1 && head.Decor == 2,
+                  "three stacked balls make a snowman");
+            float lean = Strike(w, p, bottom, 6, 150);
+            Check(lean > 0.01f && head.Below == mid && !head.NoseLost,
+                  $"a gentle knock makes the snowman wobble (max lean {lean:0.000} rad) without breaking it");
+            Check(MathF.Abs(bottom.Wobble) < 0.005f, "the wobble settles back upright");
+            Check(MathF.Abs(head.X - bottom.X) < 0.5f, "a settled snowman stands straight (stacking is stable)");
+        }
+        {
+            var w = Bare(out var p);
+            var (bottom, mid, head) = Snowman(w, p);
+            w.AddBall(p, bottom.X - 60, 12).Vx = 500;   // arrives at ~400 px/s: a ~95 px/s knock, over the 80 threshold
+            bool flew = false;
+            for (int i = 0; i < 30; i++) { Step(w, 1); flew |= w.Carrots.Count > 0; }
+            Check(head.NoseLost && flew && head.Below == mid, "a solid knock sends the carrot flying, the snowman stays up");
+            Step(w, 60 * 8);
+            Check(w.Carrots.Count == 0, "the fallen carrot rests a while, then fades away");
+        }
+        {
+            var w = Bare(out var p);
+            var (bottom, mid, head) = Snowman(w, p);
+            Strike(w, p, bottom, 40, 600);
+            Check(head.Below == null && mid.Below == null, "bowling: a big fast ball knocks the snowman over");
+        }
+        {
+            Cfg.CarrotFalls = false;
+            var w = Bare(out var p);
+            var (bottom, _, head) = Snowman(w, p);
+            w.AddBall(p, bottom.X - 60, 12).Vx = 400;
+            Step(w, 60);
+            Check(!head.NoseLost && w.Carrots.Count == 0, "the falling carrot can be switched off");
+            Cfg.CarrotFalls = true;
+        }
+        {
+            // Everything new on screen at once: snowman, loose carrot, trails, lights; drawing must still not allocate
+            var w = NewWorld(out var p);
+            w.LightsOn = true;
+            var (bottom, _, _) = Snowman(w, p);
+            w.AddBall(p, bottom.X - 60, 12).Vx = 400;
+            SweepMouse(w, p, 1);
+            Step(w, 10);
+            const int bw = 1920, bh = 1080;
+            var buf = new uint[bw * bh];
+            fixed (uint* px = buf)
+            {
+                for (int i = 0; i < 5; i++) Render.World(px, bw, bh, w, 1);
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                for (int i = 0; i < 30; i++) Render.World(px, bw, bh, w, 1);
+                long alloc = GC.GetAllocatedBytesForCurrentThread() - before;
+                Check(alloc == 0, $"drawing snowmen, carrots and trails allocates nothing ({alloc} bytes)");
+            }
+        }
     }
 
     static string Snapshot(SnowWorld w)

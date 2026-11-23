@@ -48,6 +48,12 @@ static class Cfg
     public const float BallRestitution = 0.35f;    // bounciness of ball-on-ball hits (snow is soft)
     public static bool Trails = true;              // rolling snowballs leave dents in the snow (tray menu)
     public const float TrailLife = 2.5f;           // how long a dent takes to fade (s)
+    public static bool CarrotFalls = true;         // a good knock sends the snowman's nose flying (tray menu)
+    public const float WobbleStiffness = 60;       // how quickly a struck snowman rocks back upright
+    public const float WobbleDamping = 2.5f;       // how quickly the rocking dies down
+    public const float WobbleKick = 0.02f;         // tilt speed (rad/s) per px/s of knock
+    public const float ToppleAngle = 0.45f;        // lean past this (rad) and the snowman falls apart
+    public const float NoseKnock = 80;             // knock (px/s) that sends the carrot flying
 
     // Largest snowball allowed on a w × h screen: always finite, and never more than a small share of the
     // screen's shorter side, so even an Experimental ball can't bury the desktop
@@ -174,6 +180,8 @@ sealed class Snowball
     public float MaxedAt = -1;       // when it reached its size limit (for the little "full size" flash)
     public bool Driven;              // pulled by the cursor this frame
     public float TrailAcc;           // distance rolled since the last trail mark
+    public float Wobble, WobbleV;    // tilt of a stack resting on this ball (rad, + leans right) and its speed
+    public bool NoseLost;            // snowman head whose carrot was knocked off
     public float Mass => MathF.Max(1, R * R / (Cfg.BallMassRadius * Cfg.BallMassRadius));
     public readonly (float Ang, float Dist, float Size, float Alpha)[] Specks = new (float, float, float, float)[20];
 
@@ -190,6 +198,12 @@ sealed class Snowball
         Pile = null; Below = null;
         Vx = vx; Vy = vy;
     }
+}
+
+// A snowman's nose after a good knock: it tumbles down, lies in the snow for a while, then fades
+sealed class Carrot
+{
+    public float X, Y, Vx, Vy, Rot, Spin, Len, RestAt = -1;
 }
 
 // MARK: - Fairy lights
@@ -293,6 +307,7 @@ sealed class SnowWorld
     const long GroundId = -2;
 
     public readonly List<Snowball> Balls = new();
+    public readonly List<Carrot> Carrots = new();
     Snowball activeBall, dragBall;
     public Snowball DragBall => dragBall;
     public float MouseX, MouseY;                 // cursor, set by the caller every frame
@@ -332,6 +347,7 @@ sealed class SnowWorld
         foreach (var p in Piles.Values) p.Clear();
         Ground.Clear();
         Balls.Clear();
+        Carrots.Clear();
         activeBall = dragBall = null;
         Array.Clear(Marks);
     }
@@ -587,7 +603,7 @@ sealed class SnowWorld
             b.Below = target;
             b.Vx = b.Vy = 0;
             var st = Stack(Base(b));
-            if (st.Count == 3) { st[1].Decor = 1; st[2].Decor = 2; }   // three balls make a snowman
+            if (st.Count == 3) { st[1].Decor = 1; st[2].Decor = 2; st[2].NoseLost = false; }   // three balls make a snowman
         }
         else
         {
@@ -791,6 +807,8 @@ sealed class SnowWorld
     // What a hit looks like: a burst of powder where the balls meet
     void Hit(Snowball a, Snowball b, float speed, float impulse)
     {
+        Strike(a, impulse, +1);     // a was pushed left: a stack on it leans right
+        Strike(b, impulse, -1);
         if (speed < 60) return;
         float x = a.X + a.R, y = a.Pile.TopY - MathF.Min(a.R, b.R);
         int n = Math.Min(12, (int)(speed / 40));
@@ -859,8 +877,9 @@ sealed class SnowWorld
                     b.Drop(u.Vx + Rnd.F(-40, 40), MathF.Min(u.Vy, 0) - Rnd.F(30, 80));
                 else
                 {
-                    b.X = u.X;
-                    b.Y = u.Y - u.R - b.R * 0.82f;   // sits slightly sunk into the ball below
+                    float th = Base(b).Wobble, d = u.R + b.R * 0.82f;   // sits slightly sunk into the ball below
+                    b.X = u.X + MathF.Sin(th) * d;                       // and leans with the stack
+                    b.Y = u.Y - MathF.Cos(th) * d;
                     b.Hidden = u.Hidden;
                 }
             }
@@ -868,6 +887,14 @@ sealed class SnowWorld
             {
                 var p = b.Pile;
                 bool stack = Above(b) != null;
+                if (stack)
+                {
+                    // A struck snowman rocks on its base like a damped spring; lean too far and it topples
+                    b.WobbleV += (-Cfg.WobbleStiffness * b.Wobble - Cfg.WobbleDamping * b.WobbleV) * dt;
+                    b.Wobble += b.WobbleV * dt;
+                    if (MathF.Abs(b.Wobble) > Cfg.ToppleAngle) { Topple(b); stack = false; }
+                }
+                else b.Wobble = b.WobbleV = 0;
                 if (!b.Driven)
                 {
                     // Left alone it keeps rolling: heavy balls keep their speed longer, a snowman stays planted
@@ -898,6 +925,63 @@ sealed class SnowWorld
             }
         }
         ResolveCollisions();
+        StepCarrots(dt);
+    }
+
+    // Leaned too far: everything above the base tumbles off to that side
+    void Topple(Snowball baseBall)
+    {
+        float lean = MathF.Sign(baseBall.Wobble);
+        for (var x = Above(baseBall); x != null;)
+        {
+            var next = Above(x);
+            x.Drop(baseBall.Vx + lean * Rnd.F(120, 220), -Rnd.F(60, 140));
+            x = next;
+        }
+        baseBall.Wobble = baseBall.WobbleV = 0;
+    }
+
+    // A stack whose base got knocked: the top lags behind, so it leans away from the push
+    void Strike(Snowball baseBall, float impulse, float lean)
+    {
+        if (Above(baseBall) == null) return;
+        float dv = impulse / StackMass(baseBall);
+        baseBall.WobbleV += lean * dv * Cfg.WobbleKick;
+        if (!Cfg.CarrotFalls || dv < Cfg.NoseKnock) return;
+        var head = baseBall;
+        while (Above(head) != null) head = Above(head);
+        if (head.Decor != 2 || head.NoseLost) return;
+        head.NoseLost = true;
+        Carrots.Add(new Carrot
+        {
+            X = head.X + head.R * 0.05f, Y = head.Y + head.R * 0.03f, Len = head.R * 0.75f,
+            Vx = lean * Rnd.F(60, 140) + baseBall.Vx * 0.3f, Vy = -Rnd.F(120, 200), Spin = lean * Rnd.F(6, 12),
+        });
+    }
+
+    void StepCarrots(float dt)
+    {
+        for (int i = Carrots.Count - 1; i >= 0; i--)
+        {
+            var c = Carrots[i];
+            if (c.RestAt < 0)
+            {
+                float prevY = c.Y;
+                c.Vy += Cfg.Gravity * dt;
+                c.X += c.Vx * dt;
+                c.Y += c.Vy * dt;
+                c.Rot += c.Spin * dt;
+                Pile p;
+                if (c.Vy > 0 && (p = LandingSurface(c.X, prevY, c.Y)) != null)
+                {
+                    int col = p.Col(c.X);
+                    if (col >= 0) c.Y = p.Surface(col) - 1;
+                    c.Rot = MathF.Round(c.Rot / MathF.PI) * MathF.PI;   // comes to rest lying flat
+                    c.RestAt = t;
+                }
+            }
+            if (c.Y > H + 50 || c.X < -100 || c.X > W + 100 || (c.RestAt >= 0 && t - c.RestAt > 6)) Carrots.RemoveAt(i);
+        }
     }
 
     // First surface a falling ball hits between two heights: window tops (front to back), then the ground
@@ -1180,12 +1264,13 @@ unsafe static class Render
              new BoxSdf { Cx = (x0 + x1) / 2, Cy = (y0 + y1) / 2, Hx = (x1 - x0) / 2 - rad, Hy = (y1 - y0) / 2 - rad, Rad = rad },
              1, cr, cg, cb);
 
-    static void Triangle(uint* buf, int bw, int bh, float ax, float ay, float bx, float by, float cx, float cy, float cr, float cg, float cb) =>
+    static void Triangle(uint* buf, int bw, int bh, float ax, float ay, float bx, float by, float cx, float cy, float cr, float cg, float cb,
+                         float alpha = 1) =>
         Fill(buf, bw, bh, MathF.Min(ax, MathF.Min(bx, cx)), MathF.Min(ay, MathF.Min(by, cy)),
              MathF.Max(ax, MathF.Max(bx, cx)), MathF.Max(ay, MathF.Max(by, cy)),
              new TriSdf { Ax = ax, Ay = ay, Bx = bx, By = by, Cx = cx, Cy = cy,
                           S = MathF.Sign((bx - ax) * (cy - ay) - (by - ay) * (cx - ax)) },
-             1, cr, cg, cb);
+             alpha, cr, cg, cb);
 
     // Snowball: lit from the top-left with a bluish shade at the bottom-right, plus specks that turn as it rolls
     public static void Ball(uint* buf, int bw, int bh, Snowball ball, float s, float t)
@@ -1212,7 +1297,7 @@ unsafe static class Render
             Circle(buf, bw, bh, cx + MathF.Cos(a) * sp.Dist * R, cy + MathF.Sin(a) * sp.Dist * R,
                    MathF.Max(0.5f, sp.Size * R), sp.Alpha, 0.66f, 0.73f, 0.87f);
         }
-        if (ball.Decor == 2) Head(buf, bw, bh, cx, cy, R);
+        if (ball.Decor == 2) Head(buf, bw, bh, cx, cy, R, !ball.NoseLost);
         else if (ball.Decor == 1) Body(buf, bw, bh, cx, cy, R);
         // Reached full size: a soft ring that grows and fades (0.6 s)
         float age = t - ball.MaxedAt;
@@ -1224,12 +1309,15 @@ unsafe static class Render
     }
 
     // Snowman head: eyes, carrot nose, a smile and a red scarf
-    static void Head(uint* buf, int bw, int bh, float cx, float cy, float R)
+    static void Head(uint* buf, int bw, int bh, float cx, float cy, float R, bool nose)
     {
         for (int sx = -1; sx <= 1; sx += 2)
             Circle(buf, bw, bh, cx + sx * R * 0.3f, cy - R * 0.22f, MathF.Max(1, R * 0.09f), 1, 0.08f, 0.08f, 0.08f);
-        Triangle(buf, bw, bh, cx + R * 0.02f, cy - R * 0.06f, cx + R * 0.75f, cy + R * 0.04f, cx + R * 0.02f, cy + R * 0.12f,
-                 0.96f, 0.52f, 0.13f);
+        if (nose)
+            Triangle(buf, bw, bh, cx + R * 0.02f, cy - R * 0.06f, cx + R * 0.75f, cy + R * 0.04f, cx + R * 0.02f, cy + R * 0.12f,
+                     0.96f, 0.52f, 0.13f);
+        else
+            Circle(buf, bw, bh, cx + R * 0.04f, cy + R * 0.03f, MathF.Max(0.8f, R * 0.06f), 0.5f, 0.55f, 0.62f, 0.75f);   // a little hole
         for (int k = 0; k < 5; k++)
         {
             float a = MathF.PI * (1.2f + 0.15f * k);
@@ -1261,6 +1349,17 @@ unsafe static class Render
         (0.10f, 0.42f, 1.00f),   // blue
         (1.00f, 0.15f, 0.62f),   // pink
     };
+
+    // A loose carrot: the same orange cone as the nose, pointing along its spin; fades in its last second
+    static void Carrot(uint* buf, int bw, int bh, Carrot c, float s, float t)
+    {
+        float alpha = c.RestAt < 0 ? 1 : Math.Clamp(6 - (t - c.RestAt), 0, 1);
+        if (alpha <= 0) return;
+        float ux = MathF.Cos(c.Rot), uy = MathF.Sin(c.Rot), half = c.Len * 0.12f;
+        float x = c.X * s, y = c.Y * s;
+        Triangle(buf, bw, bh, x - uy * half * s, y + ux * half * s, x + ux * c.Len * s, y + uy * c.Len * s,
+                 x + uy * half * s, y - ux * half * s, 0.96f, 0.52f, 0.13f, alpha);
+    }
 
     // Dents left by rolling snowballs: soft bluish hollows that fade away
     static void Trails(uint* buf, int bw, int bh, SnowWorld w, float s)
@@ -1355,6 +1454,7 @@ unsafe static class Render
         foreach (var b in w.Balls) if (!b.Hidden && b != w.DragBall) drawBalls.Add(b);
         drawBalls.Sort((u, v) => v.Y.CompareTo(u.Y));   // lower balls first, so a snowman's head sits on top
         foreach (var b in drawBalls) Ball(buf, bw, bh, b, s, w.T);
+        foreach (var c in w.Carrots) Carrot(buf, bw, bh, c, s, w.T);
         foreach (var f in w.Flakes) if (!f.Clump && f.Layer == 2) Disc(buf, bw, bh, f.X * s, f.Y * s, f.Size * 1.1f * s, f.Alpha);
         if (w.DragBall != null) Ball(buf, bw, bh, w.DragBall, s, w.T);
     }
@@ -1412,7 +1512,7 @@ static unsafe class Program
               CMD_LIGHT = 10, CMD_MEDIUM = 11, CMD_HEAVY = 12,
               CMD_GROWTH = 20,      // + growth mode 0..3
               CMD_MAXBALLS = 30,    // + index into MaxBallChoices
-              CMD_TRAILS = 40;
+              CMD_TRAILS = 40, CMD_CARROT = 41;
     static readonly int[] MaxBallChoices = { 10, 20, 40 };
     const string RegKey = @"Software\desktopsnowfall";
 
@@ -1751,6 +1851,7 @@ static unsafe class Program
                         $"At most {MaxBallChoices[i]} snowballs");
         AppendMenuW(balls, MF_SEPARATOR, UIntPtr.Zero, null);
         AppendMenuW(balls, MF_STRING | (Cfg.Trails ? MF_CHECKED : 0), (UIntPtr)CMD_TRAILS, "Rolling &trails");
+        AppendMenuW(balls, MF_STRING | (Cfg.CarrotFalls ? MF_CHECKED : 0), (UIntPtr)CMD_CARROT, "Snowman's &nose can fall off");
         AppendMenuW(menu, MF_POPUP, (UIntPtr)(ulong)balls.ToInt64(), "&Snowballs");
         AppendMenuW(menu, MF_STRING | (world.LightsOn ? MF_CHECKED : 0), (UIntPtr)CMD_LIGHTS, "Fairy &Lights ✨");
         AppendMenuW(menu, MF_STRING, (UIntPtr)CMD_CLEAR, "&Clear snow");
@@ -1781,6 +1882,10 @@ static unsafe class Program
                 break;
             case CMD_GUIDE: ShowGuide(); break;
             case CMD_QUIT: Quit(); break;
+            case CMD_CARROT:
+                Cfg.CarrotFalls = !Cfg.CarrotFalls;
+                WriteSetting("CarrotFalls", Cfg.CarrotFalls);
+                break;
             case CMD_TRAILS:
                 Cfg.Trails = !Cfg.Trails;
                 WriteSetting("Trails", Cfg.Trails);
@@ -1820,6 +1925,7 @@ static unsafe class Program
         int mb = ReadInt("MaxBalls", 20);
         Cfg.MaxBalls = Array.IndexOf(MaxBallChoices, mb) >= 0 ? mb : 20;
         Cfg.Trails = ReadInt("Trails", 1) != 0;
+        Cfg.CarrotFalls = ReadInt("CarrotFalls", 1) != 0;
     }
 
     static int ReadInt(string name, int def)
