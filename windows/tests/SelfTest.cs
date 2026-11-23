@@ -62,6 +62,7 @@ static unsafe class SelfTest
         Momentum();
         Trails();
         Snowmen();
+        Clicks();
         Console.WriteLine(fails == 0 ? "\nAll checks passed." : $"\n{fails} check(s) failed.");
         Environment.Exit(fails == 0 ? 0 : 1);
     }
@@ -312,6 +313,53 @@ static unsafe class SelfTest
                 long alloc = GC.GetAllocatedBytesForCurrentThread() - before;
                 Check(alloc == 0, $"drawing snowmen, carrots and trails allocates nothing ({alloc} bytes)");
             }
+        }
+    }
+
+    // Left click only picks up; right click breaks
+    static void Clicks()
+    {
+        {
+            var w = NewWorld(out var p);
+            var b = w.AddBall(p, 700, 15);
+            w.MouseX = b.X; w.MouseY = b.Y;
+            w.BeginDrag(w.MouseX, w.MouseY);
+            Step(w, 3);
+            w.EndDrag();                                   // a plain left click: press and release in place
+            w.MouseX = w.MouseY = -999;
+            Step(w, 60);
+            Check(w.Balls.Contains(b) && !b.Falling && b.Pile == p && b.R == 15,
+                  "a left click on a snowball doesn't break it (it settles back on the snow)");
+        }
+        {
+            var w = NewWorld(out var p);
+            var b = w.AddBall(p, 700, 15);
+            Array.Clear(p.H);
+            float snow = p.Total;
+            w.MouseX = b.X; w.MouseY = b.Y;
+            w.BeginDrag(w.MouseX, w.MouseY);
+            for (int i = 0; i < 20; i++) { w.MouseY -= 15; Step(w, 1); }   // lift it 300 px
+            w.EndDrag();
+            w.MouseX = w.MouseY = -999;
+            Step(w, 180);
+            Check(!w.Balls.Contains(b) && p.Total > snow, "dropped from high up, a snowball still goes poof into snow");
+        }
+        {
+            var w = NewWorld(out var p);
+            var b = w.AddBall(p, 700, 15);
+            Array.Clear(p.H);
+            int clumps = Clumps(w);
+            Check(w.Smash(b.X, b.Y) && !w.Balls.Contains(b) && p.Total > 0 && Clumps(w) > clumps,
+                  "a right click breaks a snowball into powder and snow");
+            Check(!w.Smash(100, 100), "a right click away from snowballs does nothing (passes through)");
+        }
+        {
+            var w = Bare(out var p);
+            var (bottom, mid, head) = Snowman(w, p);
+            w.Smash(mid.X, mid.Y);
+            Step(w, 90);
+            Check(!w.Balls.Contains(mid) && head.Below == null && w.Balls.Contains(bottom),
+                  "breaking a snowman's middle lets its head tumble off");
         }
     }
 

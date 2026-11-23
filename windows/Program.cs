@@ -54,6 +54,7 @@ static class Cfg
     public const float WobbleKick = 0.02f;         // tilt speed (rad/s) per px/s of knock
     public const float ToppleAngle = 0.45f;        // lean past this (rad) and the snowman falls apart
     public const float NoseKnock = 80;             // knock (px/s) that sends the carrot flying
+    public const float SoftLanding = 380;          // a ball landing slower than this (px/s, ~a 80 px drop) settles instead of bursting
 
     // Largest snowball allowed on a w × h screen: always finite, and never more than a small share of the
     // screen's shorter side, so even an Experimental ball can't bury the desktop
@@ -859,10 +860,10 @@ sealed class SnowWorld
                 b.Y += b.Vy * dt;
                 b.Rot += b.Vx * dt / b.R;
                 Pile p;
-                if (b.Vy > 0 && (p = LandingSurface(b.X, prevBottom, b.Y + b.R)) != null)
+                if (b.Vy > 0 && (p = LandingSurface(b.X, prevBottom, b.Y + b.R, onEdge: true)) != null)
                 {
-                    Splat(b, p);                     // falling snowballs burst into a heap of snow
-                    gone = true;
+                    if (b.Vy < Cfg.SoftLanding) Land(b, p);   // set down gently (e.g. just clicked): it stays a ball
+                    else { Splat(b, p); gone = true; }        // a real fall bursts into a heap of snow
                 }
                 else if (b.Y > H + b.R * 2 || b.X < -100 || b.X > W + 100) gone = true;
             }
@@ -985,19 +986,58 @@ sealed class SnowWorld
     }
 
     // First surface a falling ball hits between two heights: window tops (front to back), then the ground
-    Pile LandingSurface(float x, float top, float bottom)
+    // Snowballs land on the edge they rest on (sunk into the snow), so one set down in place lands
+    // right where it was instead of slipping through; smaller things (carrots) land on top of the snow.
+    Pile LandingSurface(float x, float top, float bottom, bool onEdge = false)
     {
         foreach (var w in Order)
         {
             if (!Piles.TryGetValue(w.Id, out var p)) continue;
             int c = p.Col(x);
             if (c < 0 || p.Occ[c]) continue;
-            float s = p.Surface(c);
+            float s = onEdge ? p.TopY + 1.5f : p.Surface(c);
             if (top <= s && bottom > s) return p;
         }
         // The ground catches everything that reaches the bottom, even where a window covers it
         int g = Ground.Col(x);
-        return g >= 0 && bottom > Ground.Surface(g) ? Ground : null;
+        return g >= 0 && bottom > (onEdge ? Ground.TopY + 1.5f : Ground.Surface(g)) ? Ground : null;
+    }
+
+    // A gently dropped ball comes to rest on the surface (keeping its sideways speed, so it rolls on)
+    void Land(Snowball b, Pile p)
+    {
+        b.Falling = false;
+        b.Vy = 0;
+        b.Pile = p;
+        float lo = p.MinX + b.R, hi = p.MinX + p.Width - b.R;
+        if (lo < hi) b.X = Math.Clamp(b.X, lo, hi);
+        b.Y = p.TopY - b.R + 1.5f;
+    }
+
+    // Right click: the snowball under the cursor bursts into powder; anything stacked on it tumbles off
+    public bool Smash(float mx, float my)
+    {
+        var b = BallAt(mx, my);
+        if (b == null || b.Dragging) return false;
+        for (var a = Above(b); a != null;)
+        {
+            var next = Above(a);
+            a.Drop(Rnd.F(-60, 60), -Rnd.F(60, 120));
+            a = next;
+        }
+        RemoveDecor(b);
+        var surface = Base(b).Pile;
+        b.Below = null;
+        if (surface != null) Splat(b, surface);
+        for (int k = 0; k < Math.Min(24, (int)b.R + 6); k++)
+        {
+            float ang = Rnd.F(0, 6.28f), r = Rnd.F(0, b.R);
+            SpawnClump(b.X + MathF.Cos(ang) * r, b.Y + MathF.Sin(ang) * r,
+                       MathF.Cos(ang) * Rnd.F(60, 200), MathF.Sin(ang) * Rnd.F(60, 200) - 120, -3);
+        }
+        Balls.Remove(b);
+        if (b == activeBall) activeBall = null;
+        return true;
     }
 
     // A falling ball bursts where it lands: its snow becomes a mound on that surface, plus a puff of powder
@@ -1497,7 +1537,7 @@ static unsafe class Program
                WS_EX_TOOLWINDOW = 0x80, WS_EX_NOACTIVATE = 0x08000000;
     const int GWL_EXSTYLE = -20;
     const uint WM_DESTROY = 0x2, WM_TIMER = 0x113, WM_DISPLAYCHANGE = 0x7E, WM_NULL = 0,
-               WM_APP = 0x8000, WM_LBUTTONDOWN = 0x201, WM_LBUTTONUP = 0x202, WM_RBUTTONUP = 0x205,
+               WM_APP = 0x8000, WM_LBUTTONDOWN = 0x201, WM_LBUTTONUP = 0x202, WM_RBUTTONDOWN = 0x204, WM_RBUTTONUP = 0x205,
                WM_MOUSEACTIVATE = 0x21, WM_CAPTURECHANGED = 0x215;
     const int MA_NOACTIVATE = 3;
     const uint MB_ICONINFORMATION = 0x40, MB_SETFOREGROUND = 0x10000, MB_TOPMOST = 0x40000;
@@ -1697,6 +1737,9 @@ static unsafe class Program
                 return IntPtr.Zero;
             case WM_MOUSEACTIVATE:
                 return (IntPtr)MA_NOACTIVATE;   // grabbing a snowball never steals focus from your apps
+            case WM_RBUTTONDOWN:
+                if (hWnd == overlay) world.Smash(world.MouseX, world.MouseY);   // right click breaks a snowball
+                return IntPtr.Zero;
             case WM_LBUTTONDOWN:
                 if (hWnd == overlay && world.BeginDrag(world.MouseX, world.MouseY)) SetCapture(overlay);
                 return IntPtr.Zero;
@@ -1910,6 +1953,7 @@ static unsafe class Program
             "⚪  Roll a snowball: slide your mouse sideways over snow\n" +
             "🎳  Push it: roll one snowball into another\n" +
             "🖐️  Carry it: hold the left mouse button on a snowball and drag\n" +
+            "💥  Break it: right-click a snowball\n" +
             "⛄  Build a snowman: stack three snowballs\n" +
             "🪟  Make snow fly: drag a window\n" +
             "✨  Hang fairy lights: ❄ tray icon → Fairy Lights\n\n" +
