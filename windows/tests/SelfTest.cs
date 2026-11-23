@@ -60,6 +60,7 @@ static unsafe class SelfTest
         Baseline();
         Limits();
         Momentum();
+        Trails();
         Console.WriteLine(fails == 0 ? "\nAll checks passed." : $"\n{fails} check(s) failed.");
         Environment.Exit(fails == 0 ? 0 : 1);
     }
@@ -186,6 +187,34 @@ static unsafe class SelfTest
             Step(w, 60);
             Check(b.R > 9, $"a coasting ball still picks up snow (area model kept, r 8 -> {b.R:0.0})");
         }
+    }
+
+    static int LiveMarks(SnowWorld w)
+    {
+        int n = 0;
+        foreach (var m in w.Marks) if (m.Pile != null && w.T - m.Born < Cfg.TrailLife) n++;
+        return n;
+    }
+
+    // D: rolling trails
+    static void Trails()
+    {
+        var w = NewWorld(out var p);
+        SweepMouse(w, p, 1);
+        int live = LiveMarks(w);
+        Check(live > 10, $"rolling leaves a trail ({live} dents)");
+        bool attached = true;
+        foreach (var m in w.Marks) if (m.Pile != null && m.Pile != p) attached = false;
+        Check(attached, "trail dents belong to the surface they were made on (they move with the window)");
+        Step(w, 120);                                    // let the ball coast to a stop (it keeps rolling, and marking)
+        Step(w, (int)(Cfg.TrailLife * 60) + 10);
+        Check(LiveMarks(w) == 0, "trail dents fade away once the ball stops");
+
+        Cfg.Trails = false;
+        var off = NewWorld(out var po);
+        SweepMouse(off, po, 1);
+        Check(LiveMarks(off) == 0, "rolling trails can be switched off");
+        Cfg.Trails = true;
     }
 
     static string Snapshot(SnowWorld w)

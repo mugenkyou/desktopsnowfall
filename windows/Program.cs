@@ -46,6 +46,8 @@ static class Cfg
     public const float DriveStiffness = 400;       // how hard the cursor pulls the ball it rolls
     public const float RollFriction = 3;           // how fast a mass-1 ball stops by itself (1/s); heavy ones coast longer
     public const float BallRestitution = 0.35f;    // bounciness of ball-on-ball hits (snow is soft)
+    public static bool Trails = true;              // rolling snowballs leave dents in the snow (tray menu)
+    public const float TrailLife = 2.5f;           // how long a dent takes to fade (s)
 
     // Largest snowball allowed on a w × h screen: always finite, and never more than a small share of the
     // screen's shorter side, so even an Experimental ball can't bury the desktop
@@ -171,6 +173,7 @@ sealed class Snowball
     public int Decor;                // 0 none, 1 snowman body, 2 snowman head
     public float MaxedAt = -1;       // when it reached its size limit (for the little "full size" flash)
     public bool Driven;              // pulled by the cursor this frame
+    public float TrailAcc;           // distance rolled since the last trail mark
     public float Mass => MathF.Max(1, R * R / (Cfg.BallMassRadius * Cfg.BallMassRadius));
     public readonly (float Ang, float Dist, float Size, float Alpha)[] Specks = new (float, float, float, float)[20];
 
@@ -298,6 +301,12 @@ sealed class SnowWorld
     public bool LightsOn;
     public readonly Dictionary<long, LightString> Lights = new();
 
+    // Rolling trails: a fixed ring of dents, so playing never allocates. A dent belongs to its surface
+    // (it moves with the window) and is only drawn where snow is still lying.
+    public struct Mark { public Pile Pile; public float Dx, Size, Born; }
+    public readonly Mark[] Marks = new Mark[256];
+    int markNext;
+
     public SnowWorld(float w, float h)
     {
         W = w; H = h;
@@ -324,6 +333,7 @@ sealed class SnowWorld
         Ground.Clear();
         Balls.Clear();
         activeBall = dragBall = null;
+        Array.Clear(Marks);
     }
 
     // MARK: Flake pool
@@ -722,6 +732,16 @@ sealed class SnowWorld
         }
         b.X = newX;
         b.Rot += moved / b.R;
+        if (Cfg.Trails)
+        {
+            b.TrailAcc += MathF.Abs(moved);
+            if (b.TrailAcc >= MathF.Max(3, b.R * 0.5f))    // spacing grows with the ball so dents don't pile up
+            {
+                b.TrailAcc = 0;
+                Marks[markNext] = new Mark { Pile = p, Dx = b.X - p.MinX, Size = b.R, Born = t };
+                markNext = (markNext + 1) % Marks.Length;
+            }
+        }
     }
 
     // 1-D collisions between resting balls on the same surface; three passes settle chains of balls
@@ -1242,6 +1262,25 @@ unsafe static class Render
         (1.00f, 0.15f, 0.62f),   // pink
     };
 
+    // Dents left by rolling snowballs: soft bluish hollows that fade away
+    static void Trails(uint* buf, int bw, int bh, SnowWorld w, float s)
+    {
+        float t = w.T;
+        for (int i = 0; i < w.Marks.Length; i++)
+        {
+            var m = w.Marks[i];
+            float age = t - m.Born;
+            if (m.Pile == null || age < 0 || age >= Cfg.TrailLife) continue;
+            var p = m.Pile;
+            float x = p.MinX + m.Dx;
+            int c = p.Col(x);
+            if (c < 0 || p.Occ[c] || p.H[c] < 0.5f) continue;
+            float ra = MathF.Max(1.5f, m.Size * 0.45f), rb = MathF.Max(0.8f, MathF.Min(p.H[c] * 0.5f, m.Size * 0.12f));
+            Ellipse(buf, bw, bh, x * s, (p.Surface(c) + rb * 0.6f) * s, ra * s, rb * s,
+                    0.22f * (1 - age / Cfg.TrailLife), 0.72f, 0.80f, 0.93f);
+        }
+    }
+
     static void Lights(uint* buf, int bw, int bh, SnowWorld w, float s)
     {
         float t = w.T;
@@ -1309,6 +1348,7 @@ unsafe static class Render
         foreach (var f in w.Flakes) if (!f.Clump && f.Layer < 2) Disc(buf, bw, bh, f.X * s, f.Y * s, f.Size * 1.1f * s, f.Alpha);
         foreach (var p in w.Piles.Values) Pile(buf, bw, bh, p, s);
         Pile(buf, bw, bh, w.Ground, s);
+        Trails(buf, bw, bh, w, s);
         Lights(buf, bw, bh, w, s);
         foreach (var f in w.Flakes) if (f.Clump) Disc(buf, bw, bh, f.X * s, f.Y * s, f.Size * 1.1f * s, f.Alpha);
         drawBalls.Clear();
@@ -1371,7 +1411,8 @@ static unsafe class Program
     const int CMD_PAUSE = 1, CMD_CLEAR = 2, CMD_QUIT = 3, CMD_LIGHTS = 4, CMD_GUIDE = 5,
               CMD_LIGHT = 10, CMD_MEDIUM = 11, CMD_HEAVY = 12,
               CMD_GROWTH = 20,      // + growth mode 0..3
-              CMD_MAXBALLS = 30;    // + index into MaxBallChoices
+              CMD_MAXBALLS = 30,    // + index into MaxBallChoices
+              CMD_TRAILS = 40;
     static readonly int[] MaxBallChoices = { 10, 20, 40 };
     const string RegKey = @"Software\desktopsnowfall";
 
@@ -1708,6 +1749,8 @@ static unsafe class Program
         for (int i = 0; i < MaxBallChoices.Length; i++)
             AppendMenuW(balls, MF_STRING | (Cfg.MaxBalls == MaxBallChoices[i] ? MF_CHECKED : 0), (UIntPtr)(uint)(CMD_MAXBALLS + i),
                         $"At most {MaxBallChoices[i]} snowballs");
+        AppendMenuW(balls, MF_SEPARATOR, UIntPtr.Zero, null);
+        AppendMenuW(balls, MF_STRING | (Cfg.Trails ? MF_CHECKED : 0), (UIntPtr)CMD_TRAILS, "Rolling &trails");
         AppendMenuW(menu, MF_POPUP, (UIntPtr)(ulong)balls.ToInt64(), "&Snowballs");
         AppendMenuW(menu, MF_STRING | (world.LightsOn ? MF_CHECKED : 0), (UIntPtr)CMD_LIGHTS, "Fairy &Lights ✨");
         AppendMenuW(menu, MF_STRING, (UIntPtr)CMD_CLEAR, "&Clear snow");
@@ -1738,6 +1781,10 @@ static unsafe class Program
                 break;
             case CMD_GUIDE: ShowGuide(); break;
             case CMD_QUIT: Quit(); break;
+            case CMD_TRAILS:
+                Cfg.Trails = !Cfg.Trails;
+                WriteSetting("Trails", Cfg.Trails);
+                break;
             case >= CMD_GROWTH and < CMD_GROWTH + 4:
                 Cfg.GrowthMode = cmd - CMD_GROWTH;
                 WriteInt("GrowthMode", Cfg.GrowthMode);
@@ -1772,6 +1819,7 @@ static unsafe class Program
         Cfg.ExperimentalMaxRadius = Math.Clamp(ReadInt("ExperimentalMaxRadius", 100), 4, 1000);
         int mb = ReadInt("MaxBalls", 20);
         Cfg.MaxBalls = Array.IndexOf(MaxBallChoices, mb) >= 0 ? mb : 20;
+        Cfg.Trails = ReadInt("Trails", 1) != 0;
     }
 
     static int ReadInt(string name, int def)
