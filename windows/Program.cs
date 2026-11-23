@@ -53,7 +53,8 @@ readonly record struct Layer(float SizeMin, float SizeMax, float SpeedMin, float
 
 static class Rnd
 {
-    static readonly Random R = new();
+    static Random R = new();
+    public static void Seed(int seed) => R = new Random(seed);   // same seed + same input = same snow (tests)
     public static float F(float a, float b) => a + (float)R.NextDouble() * (b - a);
 }
 
@@ -955,62 +956,107 @@ unsafe static class Render
         }
     }
 
-    // Anti-aliased fill of any shape given by its signed distance (physical px, negative inside)
-    delegate float Sdf(float x, float y);
-    static void Fill(uint* buf, int bw, int bh, float x0, float y0, float x1, float y1, Sdf sdf,
-                     float alpha, float r, float g, float b)
+    // Anti-aliased fill of any shape given by its signed distance (physical px, negative inside).
+    // Shapes are structs so drawing a frame allocates nothing.
+    interface ISdf { float D(float x, float y); }
+
+    struct CircleSdf : ISdf
+    {
+        public float X, Y, R;
+        public float D(float x, float y) => MathF.Sqrt((x - X) * (x - X) + (y - Y) * (y - Y)) - R;
+    }
+
+    struct RingSdf : ISdf
+    {
+        public float X, Y, R, W;
+        public float D(float x, float y) => MathF.Abs(MathF.Sqrt((x - X) * (x - X) + (y - Y) * (y - Y)) - R) - W / 2;
+    }
+
+    struct SegSdf : ISdf
+    {
+        public float Ax, Ay, Bx, By, W;
+        public float D(float px, float py)
+        {
+            float vx = Bx - Ax, vy = By - Ay;
+            float t = Math.Clamp(((px - Ax) * vx + (py - Ay) * vy) / MathF.Max(1e-6f, vx * vx + vy * vy), 0, 1);
+            float dx = px - Ax - vx * t, dy = py - Ay - vy * t;
+            return MathF.Sqrt(dx * dx + dy * dy) - W / 2;
+        }
+    }
+
+    struct BoxSdf : ISdf
+    {
+        public float Cx, Cy, Hx, Hy, Rad;   // centre, half size minus corner radius, corner radius
+        public float D(float x, float y)
+        {
+            float qx = MathF.Abs(x - Cx) - Hx, qy = MathF.Abs(y - Cy) - Hy;
+            float ox = MathF.Max(qx, 0), oy = MathF.Max(qy, 0);
+            return MathF.Sqrt(ox * ox + oy * oy) + MathF.Min(MathF.Max(qx, qy), 0) - Rad;
+        }
+    }
+
+    // Convex triangle: distance = the largest distance outside any of its three edges
+    struct TriSdf : ISdf
+    {
+        public float Ax, Ay, Bx, By, Cx, Cy, S;   // S: winding sign
+        static float Edge(float s, float px, float py, float x0, float y0, float x1, float y1)
+        {
+            float ex = x1 - x0, ey = y1 - y0, len = MathF.Max(1e-6f, MathF.Sqrt(ex * ex + ey * ey));
+            return -s * (ex * (py - y0) - ey * (px - x0)) / len;
+        }
+        public float D(float x, float y) =>
+            MathF.Max(Edge(S, x, y, Ax, Ay, Bx, By), MathF.Max(Edge(S, x, y, Bx, By, Cx, Cy), Edge(S, x, y, Cx, Cy, Ax, Ay)));
+    }
+
+    // Axis-aligned ellipse (approximate distance, fine for anti-aliasing)
+    struct EllipseSdf : ISdf
+    {
+        public float X, Y, A, B;
+        public float D(float x, float y)
+        {
+            float u = (x - X) / A, v = (y - Y) / B;
+            return (MathF.Sqrt(u * u + v * v) - 1) * MathF.Min(A, B);
+        }
+    }
+
+    static void Fill<T>(uint* buf, int bw, int bh, float x0, float y0, float x1, float y1, in T sdf,
+                        float alpha, float r, float g, float b) where T : struct, ISdf
     {
         int ix0 = Math.Max(0, (int)MathF.Floor(x0) - 1), ix1 = Math.Min(bw - 1, (int)MathF.Ceiling(x1) + 1);
         int iy0 = Math.Max(0, (int)MathF.Floor(y0) - 1), iy1 = Math.Min(bh - 1, (int)MathF.Ceiling(y1) + 1);
         for (int y = iy0; y <= iy1; y++)
             for (int x = ix0; x <= ix1; x++)
             {
-                float cov = Math.Clamp(0.5f - sdf(x + 0.5f, y + 0.5f), 0, 1);
+                float cov = Math.Clamp(0.5f - sdf.D(x + 0.5f, y + 0.5f), 0, 1);
                 if (cov > 0) Blend(buf + (long)y * bw + x, cov * alpha, r, g, b);
             }
     }
 
-    static float SegDist(float px, float py, float ax, float ay, float bx, float by)
-    {
-        float vx = bx - ax, vy = by - ay;
-        float t = Math.Clamp(((px - ax) * vx + (py - ay) * vy) / MathF.Max(1e-6f, vx * vx + vy * vy), 0, 1);
-        float dx = px - ax - vx * t, dy = py - ay - vy * t;
-        return MathF.Sqrt(dx * dx + dy * dy);
-    }
-
     static void Circle(uint* buf, int bw, int bh, float cx, float cy, float r, float a, float cr, float cg, float cb) =>
-        Fill(buf, bw, bh, cx - r, cy - r, cx + r, cy + r,
-             (x, y) => MathF.Sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy)) - r, a, cr, cg, cb);
+        Fill(buf, bw, bh, cx - r, cy - r, cx + r, cy + r, new CircleSdf { X = cx, Y = cy, R = r }, a, cr, cg, cb);
+
+    static void Ring(uint* buf, int bw, int bh, float cx, float cy, float r, float width, float a, float cr, float cg, float cb) =>
+        Fill(buf, bw, bh, cx - r - width, cy - r - width, cx + r + width, cy + r + width,
+             new RingSdf { X = cx, Y = cy, R = r, W = width }, a, cr, cg, cb);
 
     static void Line(uint* buf, int bw, int bh, float ax, float ay, float bx, float by, float width, float a, float cr, float cg, float cb) =>
         Fill(buf, bw, bh, MathF.Min(ax, bx) - width, MathF.Min(ay, by) - width, MathF.Max(ax, bx) + width, MathF.Max(ay, by) + width,
-             (x, y) => SegDist(x, y, ax, ay, bx, by) - width / 2, a, cr, cg, cb);
+             new SegSdf { Ax = ax, Ay = ay, Bx = bx, By = by, W = width }, a, cr, cg, cb);
 
-    static void RoundRect(uint* buf, int bw, int bh, float x0, float y0, float x1, float y1, float rad, float cr, float cg, float cb)
-    {
-        float cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, hx = (x1 - x0) / 2 - rad, hy = (y1 - y0) / 2 - rad;
-        Fill(buf, bw, bh, x0, y0, x1, y1, (x, y) =>
-        {
-            float qx = MathF.Abs(x - cx) - hx, qy = MathF.Abs(y - cy) - hy;
-            float ox = MathF.Max(qx, 0), oy = MathF.Max(qy, 0);
-            return MathF.Sqrt(ox * ox + oy * oy) + MathF.Min(MathF.Max(qx, qy), 0) - rad;
-        }, 1, cr, cg, cb);
-    }
+    static void Ellipse(uint* buf, int bw, int bh, float cx, float cy, float ra, float rb, float a, float cr, float cg, float cb) =>
+        Fill(buf, bw, bh, cx - ra, cy - rb, cx + ra, cy + rb, new EllipseSdf { X = cx, Y = cy, A = ra, B = rb }, a, cr, cg, cb);
 
-    // Convex triangle: distance = the largest distance outside any of its three edges
-    static void Triangle(uint* buf, int bw, int bh, float ax, float ay, float bx, float by, float cx, float cy, float cr, float cg, float cb)
-    {
-        float s = MathF.Sign((bx - ax) * (cy - ay) - (by - ay) * (cx - ax));
-        float Edge(float px, float py, float x0, float y0, float x1, float y1)
-        {
-            float ex = x1 - x0, ey = y1 - y0, len = MathF.Max(1e-6f, MathF.Sqrt(ex * ex + ey * ey));
-            return -s * (ex * (py - y0) - ey * (px - x0)) / len;
-        }
+    static void RoundRect(uint* buf, int bw, int bh, float x0, float y0, float x1, float y1, float rad, float cr, float cg, float cb) =>
+        Fill(buf, bw, bh, x0, y0, x1, y1,
+             new BoxSdf { Cx = (x0 + x1) / 2, Cy = (y0 + y1) / 2, Hx = (x1 - x0) / 2 - rad, Hy = (y1 - y0) / 2 - rad, Rad = rad },
+             1, cr, cg, cb);
+
+    static void Triangle(uint* buf, int bw, int bh, float ax, float ay, float bx, float by, float cx, float cy, float cr, float cg, float cb) =>
         Fill(buf, bw, bh, MathF.Min(ax, MathF.Min(bx, cx)), MathF.Min(ay, MathF.Min(by, cy)),
              MathF.Max(ax, MathF.Max(bx, cx)), MathF.Max(ay, MathF.Max(by, cy)),
-             (x, y) => MathF.Max(Edge(x, y, ax, ay, bx, by), MathF.Max(Edge(x, y, bx, by, cx, cy), Edge(x, y, cx, cy, ax, ay))),
+             new TriSdf { Ax = ax, Ay = ay, Bx = bx, By = by, Cx = cx, Cy = cy,
+                          S = MathF.Sign((bx - ax) * (cy - ay) - (by - ay) * (cx - ax)) },
              1, cr, cg, cb);
-    }
 
     // Snowball: lit from the top-left with a bluish shade at the bottom-right, plus specks that turn as it rolls
     public static void Ball(uint* buf, int bw, int bh, Snowball ball, float s)

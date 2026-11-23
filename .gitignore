@@ -7,6 +7,8 @@ dist/
 # Windows build output
 windows/bin/
 windows/obj/
+windows/tests/bin/
+windows/tests/obj/
 
 # Temporary / editor files
 *.new
