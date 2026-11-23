@@ -1,0 +1,14 @@
+# Compiled binary (built by build.sh)
+/desktopsnowfall
+
+# Packaged app (built by make_app.sh)
+dist/
+
+# Windows build output
+windows/bin/
+windows/obj/
+
+# Temporary / editor files
+*.new
+.DS_Store
+.vscode/
