@@ -59,6 +59,7 @@ static unsafe class SelfTest
     {
         Baseline();
         Limits();
+        Momentum();
         Console.WriteLine(fails == 0 ? "\nAll checks passed." : $"\n{fails} check(s) failed.");
         Environment.Exit(fails == 0 ? 0 : 1);
     }
@@ -93,7 +94,7 @@ static unsafe class SelfTest
             Cfg.GrowthMode = mode;
             var w = NewWorld(out var p);
             float last = -1;
-            for (int pass = 0; pass < 80 && Biggest(w) > last + 0.01f; pass++) { last = Biggest(w); SweepMouse(w, p, 1); }
+            for (int pass = 0; pass < 80 && Biggest(w) > last + 0.01f; pass++) { last = Biggest(w); SweepMouse(w, p, 2); }   // back and forth
             float r = Biggest(w);
             Snowball big = null;
             foreach (var b in w.Balls) if (b.R == r) big = b;
@@ -115,6 +116,76 @@ static unsafe class SelfTest
         for (int i = 0; i < 25; i++) m.AddBall(mp, 250 + i * 40, 8);
         Check(m.Balls.Count == 10, $"max snowball count is respected ({m.Balls.Count} of 10)");
         Cfg.MaxBalls = 20;
+    }
+
+    static SnowWorld Bare(out Pile p) { var w = NewWorld(out p); Array.Clear(p.H); return w; }   // window with no snow
+    static int Clumps(SnowWorld w) { int n = 0; foreach (var f in w.Flakes) if (f.Clump) n++; return n; }
+
+    // C: mass, momentum, collisions
+    static void Momentum()
+    {
+        float Coast(float r) { var w = Bare(out var p); var b = w.AddBall(p, 300, r); b.Vx = 300; Step(w, 240); return b.X - 300; }
+        float light = Coast(8), heavy = Coast(40);
+        Check(heavy > light * 2, $"a heavy ball keeps its momentum longer ({heavy:0} px vs {light:0} px from the same push)");
+
+        float Pull(float r)
+        {
+            var w = Bare(out var p);
+            var b = w.AddBall(p, 600, r);
+            w.MouseY = p.TopY - 2;
+            w.MouseX = 600; Step(w, 1);
+            w.MouseX = 601; Step(w, 1);          // a little sideways movement grabs the ball
+            w.MouseX = 640; Step(w, 6);          // then the cursor jumps 40 px ahead; look 0.1 s later
+            return b.X - 600;
+        }
+        float pl = Pull(8), ph = Pull(40);
+        Check(ph < pl * 0.7f, $"a heavy ball accelerates more slowly ({ph:0.0} px vs {pl:0.0} px in 0.1 s)");
+
+        {
+            var w = Bare(out var p);
+            var hv = w.AddBall(p, 400, 40);
+            var lt = w.AddBall(p, 700, 8);
+            hv.Vx = 300;
+            int clumps0 = Clumps(w);
+            float before = 0;
+            bool hit = false;
+            for (int i = 0; i < 120 && !hit; i++) { before = hv.Mass * hv.Vx + lt.Mass * lt.Vx; Step(w, 1); hit = lt.Vx > 0; }
+            float after = hv.Mass * hv.Vx + lt.Mass * lt.Vx;
+            Check(hit && MathF.Abs(after - before) / before < 0.05f, $"a collision transfers momentum without creating any ({before:0} -> {after:0})");
+            Check(lt.Vx > hv.Vx, $"a big ball knocks a small one away faster than itself ({lt.Vx:0} vs {hv.Vx:0} px/s)");
+            Check(Clumps(w) > clumps0, "a fast collision throws a burst of powder");
+        }
+        {
+            var w = Bare(out var p);
+            var lt = w.AddBall(p, 400, 8);
+            var hv = w.AddBall(p, 700, 40);
+            lt.Vx = 400;
+            Step(w, 90);
+            Check(MathF.Abs(hv.X - 700) < 20, $"a small ball can't shove a big one far ({hv.X - 700:0.0} px)");
+        }
+        {
+            var w = Bare(out var p);
+            var a = w.AddBall(p, 400, 10);
+            w.AddBall(p, 600, 10);
+            var last = w.AddBall(p, 621, 10);
+            a.Vx = 900;                           // enough to coast the 180 px to the row
+            Step(w, 60);
+            Check(last.X - 621 > 20, $"a hit travels down a row of balls ({last.X - 621:0} px)");
+        }
+        {
+            var w = Bare(out var p);
+            var b = w.AddBall(p, p.MinX + p.Width - 30, 10);
+            b.Vx = 300;
+            Step(w, 60);
+            Check(b.Falling || !w.Balls.Contains(b), "a ball rolling past the end of a window falls off");
+        }
+        {
+            var w = NewWorld(out var p);
+            var b = w.AddBall(p, 400, 8);
+            b.Vx = 300;
+            Step(w, 60);
+            Check(b.R > 9, $"a coasting ball still picks up snow (area model kept, r 8 -> {b.R:0.0})");
+        }
     }
 
     static string Snapshot(SnowWorld w)

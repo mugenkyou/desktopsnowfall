@@ -42,6 +42,10 @@ static class Cfg
     static readonly float[] GrowthRadius = { 28, 42, 70 };   // Normal, Large (1.5×), Giant (2.5×)
     public static float ExperimentalMaxRadius = 100;         // Experimental limit (registry), still screen-bounded
     public static int MaxBalls = 20;               // oldest resting snowballs are removed beyond this
+    public const float BallMassRadius = 12;        // a ball this big has mass 1; mass grows with area
+    public const float DriveStiffness = 400;       // how hard the cursor pulls the ball it rolls
+    public const float RollFriction = 3;           // how fast a mass-1 ball stops by itself (1/s); heavy ones coast longer
+    public const float BallRestitution = 0.35f;    // bounciness of ball-on-ball hits (snow is soft)
 
     // Largest snowball allowed on a w × h screen: always finite, and never more than a small share of the
     // screen's shorter side, so even an Experimental ball can't bury the desktop
@@ -166,6 +170,8 @@ sealed class Snowball
     public bool Falling, Dragging, Hidden;
     public int Decor;                // 0 none, 1 snowman body, 2 snowman head
     public float MaxedAt = -1;       // when it reached its size limit (for the little "full size" flash)
+    public bool Driven;              // pulled by the cursor this frame
+    public float Mass => MathF.Max(1, R * R / (Cfg.BallMassRadius * Cfg.BallMassRadius));
     public readonly (float Ang, float Dist, float Size, float Alpha)[] Specks = new (float, float, float, float)[20];
 
     public Snowball()
@@ -413,7 +419,7 @@ sealed class SnowWorld
             pollAcc = 0;
         }
         StepFlakes(dt);
-        if (dragBall != null) StepDrag(dragBall, dt); else UpdateRolling();
+        if (dragBall != null) StepDrag(dragBall, dt); else UpdateRolling(dt);
         StepBalls(dt);
         if (LightsOn) foreach (var s in Lights.Values) if (s.Animating(t)) { UpdateLights(); break; }   // smooth swing
     }
@@ -511,7 +517,19 @@ sealed class SnowWorld
         return best;
     }
 
-    Snowball Above(Snowball b) => Balls.Find(x => x.Below == b);
+    Snowball Above(Snowball b)
+    {
+        foreach (var x in Balls) if (x.Below == b) return x;
+        return null;
+    }
+
+    // A stack (snowman) weighs as much as all of its balls
+    float StackMass(Snowball b)
+    {
+        float m = 0;
+        for (int n = 0; b != null && n < 10; n++, b = Above(b)) m += b.Mass;
+        return m;
+    }
 
     static Snowball Base(Snowball b) { while (b.Below != null) b = b.Below; return b; }
 
@@ -629,45 +647,50 @@ sealed class SnowWorld
         return MouseOver(Ground, mx, my) ? Ground : null;
     }
 
-    void UpdateRolling()
+    void UpdateRolling(float dt)
     {
         float mx = MouseX, my = MouseY;
         float dx = float.IsNaN(lastMx) ? 0 : mx - lastMx;
         lastMx = mx;
         var p = SurfaceUnderMouse(mx, my);
-        if (p == null) { activeBall = null; return; }
-        if (MathF.Abs(dx) <= 0.2f) return;
-
-        // Keep rolling the current ball, pick up a resting one under the mouse, or start a new one
         var b = activeBall;
-        if (b != null && b.Pile == p && Above(b) == null && MathF.Abs(b.X - (mx - dx)) < b.R + 25)
-        {
-            // keep it
-        }
-        else if ((b = Balls.Find(o => !o.Falling && o.Pile == p && MathF.Abs(o.X - mx) < o.R + 10)) != null)
-        {
-            if (Above(b) != null) { activeBall = null; return; }   // don't roll the bottom of a snowman
-            activeBall = b;
-        }
-        else
-        {
-            int c = p.Col(mx);
-            if (c < 0 || p.H[c] <= 1.5f) { activeBall = null; return; }
-            b = new Snowball { X = mx, Pile = p };
-            b.Y = p.TopY - b.R + 1.5f;
-            Balls.Add(b);
-            activeBall = b;
-            TrimBalls();
-        }
+        // Mouse left the snow (or the ball left its surface): the ball rolls on by itself
+        if (b != null && (p == null || b.Pile != p || Above(b) != null)) b = activeBall = null;
+        if (p == null) return;
 
-        // Move the ball to the mouse, staying on the surface
-        float lo = p.MinX + b.R, hi = p.MinX + p.Width - b.R;
-        float newX = lo < hi ? Math.Clamp(mx, lo, hi) : b.X;
-        float moved = newX - b.X;
-        if (MathF.Abs(moved) <= 0.01f) return;
-        float oldX = b.X;
-        Roll(b, p, newX);
-        Push(b, oldX, moved > 0 ? 1 : -1, p);
+        // A sideways movement picks up the resting ball under the mouse, or starts a new one. A heavy ball
+        // trails the cursor, so how far it may fall behind before the cursor lets go grows with its weight.
+        bool fresh = b == null || MathF.Abs(b.X - mx) > b.R + 60 + 40 * MathF.Sqrt(b.Mass);
+        if (MathF.Abs(dx) > 0.2f && fresh)
+        {
+            b = null;
+            foreach (var o in Balls)
+                if (!o.Falling && o.Pile == p && MathF.Abs(o.X - mx) < o.R + 10) { b = o; break; }
+            if (b != null && Above(b) != null) b = null;              // don't roll the bottom of a snowman
+            else if (b == null)
+            {
+                int c = p.Col(mx);
+                if (c >= 0 && p.H[c] > 1.5f)
+                {
+                    b = new Snowball { X = mx, Pile = p };
+                    b.Y = p.TopY - b.R + 1.5f;
+                    Balls.Add(b);
+                    activeBall = b;          // set before trimming so the new ball is never the one removed
+                    TrimBalls();
+                }
+            }
+            activeBall = b;
+        }
+        if (b == null) return;
+
+        // The cursor pulls the ball like a critically damped spring that also matches the mouse's speed:
+        // a small ball follows at once, a heavy one takes its time to get going (and to stop)
+        float m = b.Mass, lo = p.MinX + b.R, hi = p.MinX + p.Width - b.R;
+        float target = lo < hi ? Math.Clamp(mx, lo, hi) : b.X;
+        // Match the mouse's speed only once the ball is already rolling (a cursor arriving from far away is not a fling)
+        float mouseV = target == mx && dt > 0 && !fresh ? Math.Clamp(dx / dt, -1500, 1500) : 0;
+        b.Vx += (Cfg.DriveStiffness * (target - b.X) + 2 * MathF.Sqrt(Cfg.DriveStiffness * m) * (mouseV - b.Vx)) / m * dt;
+        b.Driven = true;
     }
 
     // Roll a ball to newX: it picks up snow from the columns it passes over and grows
@@ -701,27 +724,58 @@ sealed class SnowWorld
         b.Rot += moved / b.R;
     }
 
-    // The moving ball pushes any ball it touches in front of it, which can push the next one, and so on.
-    // A ball pushed past the end of a surface falls off.
-    void Push(Snowball b, float oldX, float dir, Pile p)
+    // 1-D collisions between resting balls on the same surface; three passes settle chains of balls
+    void ResolveCollisions()
     {
-        // Look ahead of where the pusher *was*: after a fast move it may already have jumped past a ball
-        var ahead = Balls.FindAll(o => o != b && !o.Falling && !o.Dragging && o.Pile == p && (o.X - oldX) * dir > 0);
-        ahead.Sort((a, c) => MathF.Abs(a.X - oldX).CompareTo(MathF.Abs(c.X - oldX)));
-        var pusher = b;
-        foreach (var o in ahead)
-        {
-            float need = pusher.X + dir * (pusher.R + o.R);    // where o must be to just touch the pusher
-            if ((need - o.X) * dir <= 0) break;                 // not touching: the chain stops here
-            float lo = p.MinX + o.R, hi = p.MinX + p.Width - o.R;
-            if (need < lo || need > hi)
+        for (int pass = 0; pass < 3; pass++)
+            for (int i = 0; i < Balls.Count; i++)
             {
-                o.X = need;
-                o.Drop(dir * 140, -40);                         // pushed off the edge
+                var a = Balls[i];
+                if (!OnSurface(a)) continue;
+                for (int j = i + 1; j < Balls.Count; j++)
+                {
+                    var b = Balls[j];
+                    if (b.Pile == a.Pile && OnSurface(b)) Collide(a, b, pass == 0);
+                }
             }
-            else Roll(o, p, need);
-            pusher = o;
+    }
+
+    static bool OnSurface(Snowball b) => b.Pile != null && !b.Falling && !b.Dragging && b.Below == null;
+
+    void Collide(Snowball a, Snowball b, bool effects)
+    {
+        if (a.X > b.X) (a, b) = (b, a);
+        float overlap = a.R + b.R - (b.X - a.X);
+        if (overlap <= 0) return;
+        float ma = StackMass(a), mb = StackMass(b), sum = ma + mb;
+        float vrel = b.Vx - a.Vx;                                     // negative: closing in
+        if (vrel < 0)
+        {
+            float j = -(1 + Cfg.BallRestitution) * vrel * ma * mb / sum;   // impulse; momentum is conserved
+            a.Vx -= j / ma;
+            b.Vx += j / mb;
+            if (effects) Hit(a, b, -vrel, j);
         }
+        // Push apart: the lighter ball gives way more
+        Shift(a, -overlap * mb / sum);
+        Shift(b, overlap * ma / sum);
+    }
+
+    // Move a resting ball sideways: a single ball rolls (and picks up snow), a snowman slides
+    void Shift(Snowball b, float d)
+    {
+        if (Above(b) != null) b.X += d;
+        else Roll(b, b.Pile, b.X + d);
+    }
+
+    // What a hit looks like: a burst of powder where the balls meet
+    void Hit(Snowball a, Snowball b, float speed, float impulse)
+    {
+        if (speed < 60) return;
+        float x = a.X + a.R, y = a.Pile.TopY - MathF.Min(a.R, b.R);
+        int n = Math.Min(12, (int)(speed / 40));
+        for (int k = 0; k < n; k++)
+            SpawnClump(x + Rnd.F(-2, 2), y + Rnd.F(-3, 3), Rnd.F(-80, 80), -Rnd.F(60, 160), -3);
     }
 
     // Put a resting snowball on a surface (used by the self-tests)
@@ -792,9 +846,28 @@ sealed class SnowWorld
             }
             else if (b.Pile != null)
             {
-                int c = b.Pile.Col(b.X);
-                b.Hidden = c < 0 || b.Pile.Occ[c];   // hidden behind a window in front
-                b.Y = b.Pile.TopY - b.R + 1.5f;      // sits slightly sunk into the snow
+                var p = b.Pile;
+                bool stack = Above(b) != null;
+                if (!b.Driven)
+                {
+                    // Left alone it keeps rolling: heavy balls keep their speed longer, a snowman stays planted
+                    b.Vx *= MathF.Exp(-Cfg.RollFriction / MathF.Sqrt(StackMass(b)) * (stack ? 4 : 1) * dt);
+                    if (MathF.Abs(b.Vx) < 3) b.Vx = 0;
+                }
+                if (b.Vx != 0)
+                {
+                    if (stack) b.X += b.Vx * dt; else Roll(b, p, b.X + b.Vx * dt);
+                }
+                float lo = p.MinX + b.R, hi = p.MinX + p.Width - b.R;
+                if (b.Driven && lo < hi && (b.X < lo || b.X > hi)) { b.X = Math.Clamp(b.X, lo, hi); b.Vx = 0; }   // the cursor's ball stays on
+                b.Driven = false;
+                if (b.X < p.MinX || b.X > p.MinX + p.Width) b.Drop(b.Vx, 0);   // rolled off the end
+                else
+                {
+                    int c = p.Col(b.X);
+                    b.Hidden = c < 0 || p.Occ[c];    // hidden behind a window in front
+                    b.Y = p.TopY - b.R + 1.5f;       // sits slightly sunk into the snow
+                }
             }
             else b.Drop(0, 0);                       // lost its support
 
@@ -804,6 +877,7 @@ sealed class SnowWorld
                 if (b == activeBall) activeBall = null;
             }
         }
+        ResolveCollisions();
     }
 
     // First surface a falling ball hits between two heights: window tops (front to back), then the ground
