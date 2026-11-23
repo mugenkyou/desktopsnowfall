@@ -69,6 +69,7 @@ static unsafe class SelfTest
         Visitors();
         Throwing();
         Personalities();
+        FairyLights();
         Console.WriteLine(fails == 0 ? "\nAll checks passed." : $"\n{fails} check(s) failed.");
         Environment.Exit(fails == 0 ? 0 : 1);
     }
@@ -760,6 +761,95 @@ static unsafe class SelfTest
                     Png(buf, bw, bh, 860, 990, 80, 90, $"penguin-pose{pose}.png");
                 }
             Check(alloc == 0, $"drawing the penguin's poses allocates nothing ({alloc} bytes)");
+        }
+    }
+
+    static void FairyLights()
+    {
+        {
+            bool bounded = true, smooth = true;
+            float worst = 0;
+            var bulbs = new Bulb[8];
+            Rnd.Seed(3);
+            for (int i = 0; i < bulbs.Length; i++) bulbs[i] = new Bulb();
+            for (int pat = 0; pat < LightLook.PatternNames.Length; pat++)
+                for (int i = 0; i < bulbs.Length; i++)
+                {
+                    float last = LightLook.Brightness(pat, bulbs[i], i, 0);
+                    for (int f = 1; f < 60 * 30; f++)
+                    {
+                        float k = LightLook.Brightness(pat, bulbs[i], i, f * Dt);
+                        bounded &= k >= 0.3f && k <= 1.15f;
+                        worst = MathF.Max(worst, MathF.Abs(k - last));
+                        last = k;
+                    }
+                }
+            smooth = worst < 0.08f;
+            Check(bounded, "every light pattern stays between soft and bright (never off, never glaring)");
+            Check(smooth, $"no pattern flickers: the biggest change in one frame is {worst:0.000}");
+            float mean = 0, sq = 0;
+            for (int i = 0; i < bulbs.Length; i++) { float k = LightLook.Brightness(0, bulbs[i], i, 5); mean += k; sq += k * k; }
+            mean /= bulbs.Length;
+            float sd = MathF.Sqrt(sq / bulbs.Length - mean * mean);
+            Check(sd > 0.02f, $"bulbs twinkle independently (spread {sd:0.000})");
+        }
+        {
+            var w = NewWorld(out _);
+            w.LightsOn = true;
+            w.UpdateLights();
+            var ls = w.Lights[1];
+            Check(ls.Reveal(0, w.T + 0.05f) > ls.Reveal(ls.Bulbs.Count - 1, w.T + 0.05f), "bulbs light up one after another when the lights are hung");
+            Step(w, 60 * 3);
+            var moved = new List<Win> { new Win(1, 260, 400, 1460, 900) };
+            float peak = 0;
+            for (int i = 0; i < 60; i++) { Step(w, 1, moved); peak = MathF.Max(peak, MathF.Abs(ls.Sway)); }
+            Check(peak > 1, $"moving the window makes the bulbs swing ({peak:0.0} px)");
+            Step(w, 60 * 8, moved);
+            Check(MathF.Abs(ls.SwayV) < 3, "the swinging settles down again");
+            w.StartGust(80);
+            float gust = 0;
+            for (int i = 0; i < 60 * 3; i++) { Step(w, 1, moved); gust = MathF.Max(gust, MathF.Abs(ls.Sway)); }
+            Check(gust > 1.5f, $"a gust of wind swings the lights ({gust:0.0} px)");
+        }
+        {
+            var w = NewWorld(out _);
+            w.LightsOn = true;
+            Step(w, 60 * 60);
+            var ls = w.Lights[1];
+            float settled = ls.Snow;
+            int clumps = Clumps(w);
+            Step(w, 2, new List<Win> { new Win(1, 300, 400, 1500, 900) });
+            Check(settled > 0.4f && ls.Snow == 0 && Clumps(w) > clumps, $"snow settles on the wire ({settled:0.00} after a minute) and falls off when the window moves");
+            Cfg.WireSnow = false;
+            Step(w, 60 * 30);
+            Check(ls.Snow == 0, "snow on the wires can be switched off");
+            Cfg.WireSnow = true;
+        }
+        {
+            var w = NewWorld(out _);
+            w.LightsOn = true;
+            Step(w, 60 * 40);
+            const int bw = 1920, bh = 1080;
+            var buf = new uint[bw * bh];
+            long alloc = 0;
+            fixed (uint* px = buf)
+            {
+                for (int pre = 0; pre < LightLook.PresetNames.Length; pre++)
+                    for (int pat = 0; pat < LightLook.PatternNames.Length; pat++)
+                    {
+                        Cfg.LightPreset = pre; Cfg.LightPattern = pat;
+                        Render.World(px, bw, bh, w, 1);
+                        long before = GC.GetAllocatedBytesForCurrentThread();
+                        Render.World(px, bw, bh, w, 1);
+                        alloc += GC.GetAllocatedBytesForCurrentThread() - before;
+                        if (pat == 0) Png(buf, bw, bh, 400, 395, 200, 40, $"lights-{pre}.png");
+                    }
+                Cfg.LightPreset = Cfg.LightPattern = 0;
+                var sw = Stopwatch.StartNew();
+                for (int i = 0; i < 30; i++) Render.World(px, bw, bh, w, 1);
+                Console.WriteLine($"INFO  a frame with fairy lights on a 1200 px window: {sw.Elapsed.TotalMilliseconds / 30:0.00} ms");
+            }
+            Check(alloc == 0, $"every color and pattern draws without allocating ({alloc} bytes)");
         }
     }
 

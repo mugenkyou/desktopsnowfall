@@ -80,6 +80,9 @@ static class Cfg
     public const float LightInset = 14;            // keep clear of the window's rounded corners
     public const float BulbGlow = 19;              // size of a bulb's soft glow
     public const float BulbCore = 5.5f;            // size of a bulb's bright center
+    public static int LightPreset = 0;             // colors: see LightLook.PresetNames (tray menu)
+    public static int LightPattern = 0;            // animation: see LightLook.PatternNames (tray menu)
+    public static bool WireSnow = true;            // snow slowly settles on the wires and shakes off (tray menu)
 }
 
 // Three depth layers: far = small, faint, slow; near = big, bright, fast
@@ -254,7 +257,8 @@ sealed class Bulb
 {
     public float X, Y;
     public readonly float Phase = Rnd.F(0, 6.28f), Speed = Rnd.F(1.2f, 3f);
-    public int Color;
+    public readonly float Phase2 = Rnd.F(0, 6.28f), Speed2 = Rnd.F(0.5f, 1.3f);
+    public readonly float Base = Rnd.F(0.82f, 1f);   // every bulb is a little brighter or dimmer than the next
     public bool Hidden;
 }
 
@@ -263,7 +267,9 @@ sealed class LightString
 {
     public const float SwingTime = 1.4f;
     public Win Rect;
-    public float HungAt, Swing, Sway;
+    public float HungAt, Swing, HangSway;
+    public float Sway, SwayV;        // gentle sideways swing of the bulbs (a damped spring pushed by wind and window moves)
+    public float Snow;               // snow settled on the wire, 0..1
     public readonly List<Bulb> Bulbs = new();
     public readonly List<(float X, float Y, bool Hidden)> Wire = new();
 
@@ -273,10 +279,10 @@ sealed class LightString
     public void UpdateSwing(float t)
     {
         float tau = t - HungAt;
-        if (tau >= SwingTime) { Swing = 0; Sway = 0; return; }
+        if (tau >= SwingTime) { Swing = 0; HangSway = 0; return; }
         float e = MathF.Exp(-4 * tau);
         Swing = 0.9f * e * MathF.Sin(13 * tau);
-        Sway = 3.5f * e * MathF.Sin(9.5f * tau);
+        HangSway = 3.5f * e * MathF.Sin(9.5f * tau);
     }
 
     // Bulbs light up one after another from left to right as the string is hung
@@ -300,14 +306,14 @@ sealed class LightString
         if (Bulbs.Count != count)
         {
             Bulbs.Clear();
-            for (int i = 0; i < count; i++) Bulbs.Add(new Bulb { Color = i % Render.BulbColors.Length });
+            for (int i = 0; i < count; i++) Bulbs.Add(new Bulb());
         }
         for (int i = 0; i < Bulbs.Count; i++)
         {
             var b = Bulbs[i];
             float x = r.L + Cfg.LightInset + (i + 0.5f) * w / Bulbs.Count;
-            b.X = x + Sway * (0.6f + 0.4f * MathF.Sin(b.Phase));   // each bulb swings a little differently
-            b.Y = WireY(x) + 4;                                      // bulbs hang just under the wire
+            b.X = x + (HangSway + Sway) * (0.6f + 0.4f * MathF.Sin(b.Phase));   // each bulb swings a little differently
+            b.Y = WireY(x) + 4;                                                  // bulbs hang just under the wire
         }
     }
 
@@ -315,12 +321,82 @@ sealed class LightString
     public void ApplyVisibility(Func<float, float, bool> hidden)
     {
         Wire.Clear();
-        for (float x = Rect.L + Cfg.LightInset * 0.5f; x <= Rect.R - Cfg.LightInset * 0.5f; x += 4)
+        for (float x = Rect.L + Cfg.LightInset * 0.5f; x <= Rect.R - Cfg.LightInset * 0.5f; x += 3)
         {
             float y = WireY(x);
             Wire.Add((x, y, hidden(x, y)));
         }
         foreach (var b in Bulbs) b.Hidden = hidden(b.X, b.Y);
+    }
+}
+
+// How the lights look: color presets and gentle animation patterns (shared by the simulation and tests)
+static class LightLook
+{
+    public static readonly string[] PresetNames = { "Classic Christmas", "Warm White", "Arctic Blue", "Candy Colors", "Rainbow", "Golden Christmas" };
+    public static readonly string[] PatternNames = { "Gentle twinkle", "Slow breathing", "Cascade", "Alternating", "Festive sparkle" };
+
+    static readonly (float R, float G, float B)[][] Palettes =
+    {
+        new[] { (1.00f, 0.10f, 0.12f), (1.00f, 0.62f, 0.00f), (0.05f, 0.95f, 0.20f), (0.10f, 0.42f, 1.00f), (1.00f, 0.15f, 0.62f) },
+        new[] { (1.00f, 0.80f, 0.52f), (1.00f, 0.86f, 0.62f), (1.00f, 0.76f, 0.46f) },
+        new[] { (0.45f, 0.75f, 1.00f), (0.65f, 0.88f, 1.00f), (0.35f, 0.60f, 1.00f), (0.82f, 0.94f, 1.00f) },
+        new[] { (1.00f, 0.42f, 0.68f), (0.50f, 0.95f, 0.80f), (1.00f, 0.92f, 0.45f), (0.72f, 0.58f, 1.00f), (1.00f, 0.62f, 0.45f) },
+        null,   // Rainbow: computed, slowly drifting along the string
+        new[] { (1.00f, 0.72f, 0.22f), (1.00f, 0.84f, 0.40f), (0.95f, 0.60f, 0.12f), (1.00f, 0.90f, 0.55f) },
+    };
+
+    public static (float R, float G, float B) Color(int preset, int i, float t)
+    {
+        var pal = Palettes[Math.Clamp(preset, 0, Palettes.Length - 1)];
+        if (pal != null) return pal[i % pal.Length];
+        float h = (i / 8f + t * 0.02f) % 1 * 6;             // hue, 0..6
+        float x = 1 - MathF.Abs(h % 2 - 1);
+        var c = h < 1 ? (1, x, 0) : h < 2 ? (x, 1, 0) : h < 3 ? (0, 1, x) : h < 4 ? (0, x, 1) : h < 5 ? (x, 0, 1) : (1f, 0f, x);
+        return (0.15f + 0.85f * c.Item1, 0.15f + 0.85f * c.Item2, 0.15f + 0.85f * c.Item3);
+    }
+
+    // How bright bulb i is at time t (0.3..1.15). Every pattern changes smoothly: no hard flicker.
+    public static float Brightness(int pattern, Bulb b, int i, float t)
+    {
+        float k;
+        switch (pattern)
+        {
+            case 1:                                          // slow breathing, all together
+                k = 0.55f + 0.45f * (0.5f + 0.5f * MathF.Sin(t * 0.9f + b.Phase * 0.05f));
+                break;
+            case 2:                                          // a wave of light running along the string
+            {
+                float w = 0.5f + 0.5f * MathF.Sin(t * 2.2f - i * 0.45f);
+                k = 0.4f + 0.6f * w * w;
+                break;
+            }
+            case 3:                                          // odd and even bulbs take turns, fading over
+            {
+                float m = 0.5f + 0.5f * MathF.Sin(t * MathF.PI / 1.6f);
+                k = 0.4f + 0.6f * (i % 2 == 0 ? m : 1 - m);
+                break;
+            }
+            case 4:                                          // steady glow, with random bulbs flaring up briefly
+            {
+                k = 0.72f + 0.06f * MathF.Sin(t * b.Speed + b.Phase);
+                float slot = t * 2.5f;
+                int n = (int)MathF.Floor(slot);
+                if (Hash(i, n) < 0.12f) k += 0.38f * MathF.Sin(MathF.PI * (slot - n));
+                break;
+            }
+            default:                                         // gentle, irregular twinkle (two unrelated waves)
+                k = b.Base * (0.8f + 0.12f * MathF.Sin(t * b.Speed + b.Phase) + 0.08f * MathF.Sin(t * b.Speed2 * 1.618f + b.Phase2));
+                break;
+        }
+        return Math.Clamp(k, 0.3f, 1.15f);
+    }
+
+    static float Hash(int i, int n)
+    {
+        uint h = (uint)(i * 73856093) ^ (uint)(n * 19349663);
+        h ^= h >> 13; h *= 0x5bd1e995; h ^= h >> 15;
+        return (h & 0xFFFF) / 65535f;
     }
 }
 
@@ -499,7 +575,11 @@ sealed class SnowWorld
         StepVisitor(dt);
         if (dragBall != null) StepDrag(dragBall, dt); else UpdateRolling(dt);
         StepBalls(dt);
-        if (LightsOn) foreach (var s in Lights.Values) if (s.Animating(t)) { UpdateLights(); break; }   // smooth swing
+        if (LightsOn)
+        {
+            foreach (var s in Lights.Values) if (s.Animating(t)) { UpdateLights(); break; }   // smooth hang-up bounce
+            StepLights(dt);
+        }
     }
 
     void PollWindows(float dt, List<Win> wins, float? taskbarTop)
@@ -565,8 +645,18 @@ sealed class SnowWorld
         {
             var w = Order[i];
             alive.Add(w.Id);
-            if (!Lights.TryGetValue(w.Id, out var s)) Lights[w.Id] = s = new LightString { HungAt = t };
-            if (s.Rect != w || s.Animating(t)) { s.UpdateSwing(t); s.Place(w); }
+            if (!Lights.TryGetValue(w.Id, out var s)) Lights[w.Id] = s = new LightString { HungAt = t, Rect = w };
+            if (s.Rect != w || s.Animating(t))
+            {
+                float dx = w.L - s.Rect.L, dy = w.T - s.Rect.T;
+                if (dx != 0 || dy != 0)
+                {
+                    s.SwayV -= dx * 4;                                   // the bulbs lag behind a moving window...
+                    if (MathF.Abs(dx) + MathF.Abs(dy) > 1.5f) ShakeWire(s);   // ...and the snow on the wire falls off
+                }
+                s.UpdateSwing(t);
+                s.Place(w);
+            }
             int front = i;
             s.ApplyVisibility((x, y) =>
             {
@@ -578,6 +668,31 @@ sealed class SnowWorld
         var gone = new List<long>();
         foreach (var id in Lights.Keys) if (!alive.Contains(id)) gone.Add(id);
         foreach (var id in gone) Lights.Remove(id);
+    }
+
+    // Every frame: the bulbs sway in the wind like a damped spring, and snow slowly settles on the wire
+    void StepLights(float dt)
+    {
+        foreach (var s in Lights.Values)
+        {
+            s.SwayV += (-40 * s.Sway - 2.2f * s.SwayV + Wind * 1.2f) * dt;
+            s.Sway = Math.Clamp(s.Sway + s.SwayV * dt, -7, 7);
+            s.Place(s.Rect);
+            if (!Cfg.WireSnow) s.Snow = 0;
+            else if (MathF.Abs(s.SwayV) > 45) ShakeWire(s);        // a big swing shakes it off
+            else s.Snow = MathF.Min(1, s.Snow + dt / 90 * Cfg.TargetFlakes / 260f);
+        }
+    }
+
+    void ShakeWire(LightString s)
+    {
+        int n = (int)(s.Snow * 12);
+        for (int k = 0; k < n && s.Wire.Count > 0; k++)
+        {
+            var p = s.Wire[(int)Rnd.F(0, s.Wire.Count - 0.01f)];
+            if (!p.Hidden) SpawnClump(p.X, p.Y - 1, Rnd.F(-30, 30), Rnd.F(-20, 20), -3);
+        }
+        s.Snow = 0;
     }
 
     // MARK: Dragging & snowmen
@@ -1946,14 +2061,6 @@ unsafe static class Render
         }
     }
 
-    public static readonly (float R, float G, float B)[] BulbColors =
-    {
-        (1.00f, 0.10f, 0.12f),   // red
-        (1.00f, 0.62f, 0.00f),   // amber
-        (0.05f, 0.95f, 0.20f),   // green
-        (0.10f, 0.42f, 1.00f),   // blue
-        (1.00f, 0.15f, 0.62f),   // pink
-    };
 
     // Draws in a visitor's own space: x forward (it faces Dir), y up from its feet, in logical px
     struct Pen
@@ -2098,25 +2205,46 @@ unsafe static class Render
         float t = w.T;
         foreach (var ls in w.Lights.Values)
         {
+            // The wire: thin and dark, with a white line of snow on top once some has settled
+            float snow = MathF.Min(1, ls.Snow * 1.5f);
             for (int i = 1; i < ls.Wire.Count; i++)
             {
                 var a = ls.Wire[i - 1]; var b = ls.Wire[i];
                 if (a.Hidden || b.Hidden) continue;
-                Line(buf, bw, bh, a.X * s, a.Y * s, b.X * s, b.Y * s, 1.2f * s, 0.85f, 0.12f, 0.12f, 0.12f);
+                Line(buf, bw, bh, a.X * s, a.Y * s, b.X * s, b.Y * s, 1.1f * s, 0.85f, 0.10f, 0.12f, 0.10f);
+                if (snow > 0.05f)
+                    Line(buf, bw, bh, a.X * s, (a.Y - 0.9f) * s, b.X * s, (b.Y - 0.9f) * s, (0.6f + 1.4f * ls.Snow) * s, 0.9f * snow, 1, 1, 1);
             }
             for (int i = 0; i < ls.Bulbs.Count; i++)
             {
                 var b = ls.Bulbs[i];
                 if (b.Hidden) continue;
-                float rev = ls.Reveal(i, t);
-                if (rev <= 0) continue;
-                float k = 0.75f + 0.25f * MathF.Sin(t * b.Speed + b.Phase);   // twinkle
-                var c = BulbColors[b.Color];
-                Disc(buf, bw, bh, b.X * s, b.Y * s, Cfg.BulbGlow / 2 * s, 0.8f * k * rev, c.R, c.G, c.B);
-                Disc(buf, bw, bh, b.X * s, b.Y * s, Cfg.BulbCore / 2 * s, (0.85f + 0.15f * k) * rev,
-                     c.R * 0.8f + 0.2f, c.G * 0.8f + 0.2f, c.B * 0.8f + 0.2f);   // keep the center colorful
+                float k = LightLook.Brightness(Cfg.LightPattern, b, i, t) * ls.Reveal(i, t);   // 0 until it lights up
+                var c = LightLook.Color(Cfg.LightPreset, i, t);
+                Bulb(buf, bw, bh, b.X * s, b.Y * s, s, k, c.R, c.G, c.B, snow);
             }
         }
+    }
+
+    // One glass bulb: a faint pool of colored light below it, a soft bloom, the socket, the glass itself
+    // (darker when dim), a hot bright center and a little glint
+    static void Bulb(uint* buf, int bw, int bh, float x, float y, float s, float k, float r, float g, float b, float snow)
+    {
+        float lit = MathF.Min(1, k);
+        if (k > 0.01f)
+        {
+            for (int j = 0; j < 3; j++)
+                Ellipse(buf, bw, bh, x, y + (9 + j) * s, (10 - 3 * j) * s, (3.6f - j) * s, 0.05f * k, r, g, b);
+            Disc(buf, bw, bh, x, y + 0.5f * s, 11 * s, 0.2f * k, r, g, b);
+            Disc(buf, bw, bh, x, y + 0.5f * s, 5.5f * s, 0.38f * k, r, g, b);
+        }
+        RoundRect(buf, bw, bh, x - 1.4f * s, y - 5.4f * s, x + 1.4f * s, y - 2.6f * s, 0.6f * s, 0.18f, 0.2f, 0.18f);
+        float dim = 0.35f + 0.65f * lit;
+        Ellipse(buf, bw, bh, x, y + 0.6f * s, 2.5f * s, 3.5f * s, 0.92f, r * dim, g * dim, b * dim);
+        if (k > 0.01f)
+            Ellipse(buf, bw, bh, x, y + 1 * s, 1.2f * s, 1.9f * s, 0.25f + 0.75f * lit, r + (1 - r) * 0.6f, g + (1 - g) * 0.6f, b + (1 - b) * 0.6f);
+        Circle(buf, bw, bh, x - 0.9f * s, y - 0.4f * s, 0.6f * s, 0.55f, 1, 1, 1);
+        if (snow > 0.05f) Ellipse(buf, bw, bh, x, y - 5.6f * s, (1.2f + 1.2f * snow) * s, (0.5f + 0.6f * snow) * s, 0.95f, 1, 1, 1);
     }
 
     // A pile: white mound above its edge with a thin blue-grey shadow just below it
@@ -2234,7 +2362,10 @@ static unsafe class Program
               CMD_MAXBALLS = 30,    // + index into MaxBallChoices
               CMD_TRAILS = 40, CMD_CARROT = 41, CMD_GUSTS = 42, CMD_FANCY = 43,
               CMD_VISITOR = 50,     // + kind 0..2
-              CMD_INVITE = 55;
+              CMD_INVITE = 55,
+              CMD_PRESET = 60,      // + preset
+              CMD_PATTERN = 70,     // + pattern
+              CMD_WIRESNOW = 80;
     static readonly int[] MaxBallChoices = { 10, 20, 40 };
     const string RegKey = @"Software\desktopsnowfall";
 
@@ -2590,6 +2721,15 @@ static unsafe class Program
         AppendMenuW(visitors, MF_STRING, (UIntPtr)CMD_INVITE, "&Invite one now");
         AppendMenuW(menu, MF_POPUP, (UIntPtr)(ulong)visitors.ToInt64(), "&Visitors 🐧");
         AppendMenuW(menu, MF_STRING | (world.LightsOn ? MF_CHECKED : 0), (UIntPtr)CMD_LIGHTS, "Fairy &Lights ✨");
+        IntPtr style = CreatePopupMenu();
+        for (int i = 0; i < LightLook.PresetNames.Length; i++)
+            AppendMenuW(style, MF_STRING | (Cfg.LightPreset == i ? MF_CHECKED : 0), (UIntPtr)(uint)(CMD_PRESET + i), LightLook.PresetNames[i]);
+        AppendMenuW(style, MF_SEPARATOR, UIntPtr.Zero, null);
+        for (int i = 0; i < LightLook.PatternNames.Length; i++)
+            AppendMenuW(style, MF_STRING | (Cfg.LightPattern == i ? MF_CHECKED : 0), (UIntPtr)(uint)(CMD_PATTERN + i), LightLook.PatternNames[i]);
+        AppendMenuW(style, MF_SEPARATOR, UIntPtr.Zero, null);
+        AppendMenuW(style, MF_STRING | (Cfg.WireSnow ? MF_CHECKED : 0), (UIntPtr)CMD_WIRESNOW, "Snow on the wires");
+        AppendMenuW(menu, MF_POPUP, (UIntPtr)(ulong)style.ToInt64(), "Light st&yle");
         AppendMenuW(menu, MF_STRING, (UIntPtr)CMD_CLEAR, "&Clear snow");
         AppendMenuW(menu, MF_STRING, (UIntPtr)CMD_GUIDE, "&How to Play ❔");
         AppendMenuW(menu, MF_SEPARATOR, UIntPtr.Zero, null);
@@ -2625,6 +2765,18 @@ static unsafe class Program
             case CMD_INVITE:
                 world.SendAway();
                 world.Invite();
+                break;
+            case >= CMD_PRESET and < CMD_PRESET + 6:
+                Cfg.LightPreset = cmd - CMD_PRESET;
+                WriteInt("LightPreset", Cfg.LightPreset);
+                break;
+            case >= CMD_PATTERN and < CMD_PATTERN + 5:
+                Cfg.LightPattern = cmd - CMD_PATTERN;
+                WriteInt("LightPattern", Cfg.LightPattern);
+                break;
+            case CMD_WIRESNOW:
+                Cfg.WireSnow = !Cfg.WireSnow;
+                WriteSetting("WireSnow", Cfg.WireSnow);
                 break;
             case CMD_GUSTS:
                 Cfg.Gusts = !Cfg.Gusts;
@@ -2683,6 +2835,9 @@ static unsafe class Program
         Cfg.Trails = ReadInt("Trails", 1) != 0;
         Cfg.CarrotFalls = ReadInt("CarrotFalls", 1) != 0;
         Cfg.Gusts = ReadInt("Gusts", 1) != 0;
+        Cfg.LightPreset = Math.Clamp(ReadInt("LightPreset", 0), 0, LightLook.PresetNames.Length - 1);
+        Cfg.LightPattern = Math.Clamp(ReadInt("LightPattern", 0), 0, LightLook.PatternNames.Length - 1);
+        Cfg.WireSnow = ReadInt("WireSnow", 1) != 0;
         for (int i = 0; i < Cfg.Visitors.Length; i++) Cfg.Visitors[i] = ReadInt("Visitor" + i, 1) != 0;
         Cfg.FancyFlakes = ReadInt("FancyFlakes", 1) != 0;
     }
