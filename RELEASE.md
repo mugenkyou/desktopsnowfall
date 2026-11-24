@@ -22,6 +22,7 @@ The **Release** workflow then:
 - runs the Windows self-tests
 - builds the Windows x64 and arm64 portable zips and the x64 installer (version taken from the tag)
 - builds the universal macOS `.app` zip (ad-hoc signed, not notarized)
+- drops the version from the file names (so the README's `releases/latest/download/…` links always get the newest)
 - writes `SHA256SUMS.txt`
 - creates a **draft** release with all of them and auto-generated notes
 

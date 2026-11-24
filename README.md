@@ -3,15 +3,15 @@
 </p>
 
 <p align="center">
-  <a href="#download"><b>Download for Windows</b></a>
+  <a href="https://github.com/mugenkyou/desktopsnowfall/releases/latest/download/desktopsnowfall-setup-x64.exe"><b>Download for Windows</b></a>
   &nbsp;&nbsp;·&nbsp;&nbsp;
-  <a href="#download"><b>Download for macOS</b></a>
+  <a href="https://github.com/mugenkyou/desktopsnowfall/releases/latest/download/desktopsnowfall-mac.zip"><b>Download for macOS</b></a>
   &nbsp;&nbsp;·&nbsp;&nbsp;
   <a href="#under-the-hood"><b>Explore the source</b></a>
 </p>
 
 <p align="center">
-  Free and open source (MIT) &nbsp;·&nbsp; Windows 10 / 11 and macOS 12 or later &nbsp;·&nbsp; Never connects to the internet
+  Free for personal use &nbsp;·&nbsp; Windows 10 / 11 and macOS 12 or later &nbsp;·&nbsp; Never connects to the internet
 </p>
 
 <br>
@@ -154,14 +154,14 @@ Desktop Snowfall is one project with two native apps: a C# app for Windows and a
 
 ## Download
 
-> **No release has been published yet.** The release pipeline is ready (see [RELEASE.md](RELEASE.md)): when the first version is tagged, the files below will appear on the [Releases page](https://github.com/mugenkyou/desktopsnowfall/releases). Until then, building it yourself takes two commands (below).
+Ready-made downloads, no building needed. Every version, with its notes and checksums, is on the [Releases page](https://github.com/mugenkyou/desktopsnowfall/releases).
 
 ### Windows
 
 Requirements: Windows 10 or 11, 64-bit (x64 or Arm). Nothing else to install.
 
-- **`desktopsnowfall-setup-x64-v….exe`**: installs just for your account (no administrator needed), adds a Start menu entry, can start the snow with Windows, and uninstalls from **Settings → Apps**
-- **`desktopsnowfall-win-x64-portable-v….zip`** or **`win-arm64`**: a single small program, nothing to install. Unzip it anywhere and double-click
+- **[Installer (recommended)](https://github.com/mugenkyou/desktopsnowfall/releases/latest/download/desktopsnowfall-setup-x64.exe)**: installs just for your account (no administrator needed), adds a Start menu entry, can start the snow with Windows, and uninstalls from **Settings → Apps**
+- **Portable, nothing to install:** [x64](https://github.com/mugenkyou/desktopsnowfall/releases/latest/download/desktopsnowfall-win-x64-portable.zip) or [Arm](https://github.com/mugenkyou/desktopsnowfall/releases/latest/download/desktopsnowfall-win-arm64-portable.zip). A single small program: unzip it anywhere and double-click
 
 The builds aren't code-signed yet, so Windows may say "Windows protected your PC": click **More info → Run anyway**. Every release lists SHA-256 checksums in `SHA256SUMS.txt`.
 
@@ -169,7 +169,7 @@ The builds aren't code-signed yet, so Windows may say "Windows protected your PC
 
 Requirements: macOS 12 or later, Apple silicon or Intel (one universal app).
 
-1. Download **`desktopsnowfall-mac-v….zip`** from the [Releases page](https://github.com/mugenkyou/desktopsnowfall/releases) (not the "Source code" files)
+1. **[Download for macOS](https://github.com/mugenkyou/desktopsnowfall/releases/latest/download/desktopsnowfall-mac.zip)**
 2. Unzip it and drag **desktopsnowfall** into your Applications folder
 3. Open it. The first time, macOS says it can't open the app: click **Done**, go to **System Settings → Privacy & Security**, scroll down and click **Open Anyway**. You only do this once
 4. For snow on the Dock, allow **desktopsnowfall** in **System Settings → Privacy & Security → Accessibility**, then restart the app
@@ -211,7 +211,6 @@ When you run it with `build.sh`, the Dock permission goes to **Terminal** instea
 
 **In progress**
 - Bringing the Mac up to the Windows feature set: throwing, visitors, snowball weight, light styles, gusts
-- The first published release
 
 **Planned**
 - More realistic snow and soft environmental lighting
@@ -272,6 +271,6 @@ Ideas, bug reports and pull requests are all welcome.
 
 ## License
 
-[MIT](LICENSE). Use it, change it, share it.
+Free for personal and other noncommercial use under the [PolyForm Noncommercial License 1.0.0](LICENSE): use it, change it, share it, as long as nobody earns money from it. Selling it, bundling it with a paid product or using it in a commercial service needs a separate commercial license; [ask here](https://github.com/mugenkyou/desktopsnowfall/issues). Versions published before this change remain under the MIT license they came with.
 
 <p align="center"><img src="assets/readme/divider.svg" width="520" alt=""></p>
