@@ -1,0 +1,132 @@
+@import "tailwindcss";
+
+/* Winter palette and type, used with restraint: mostly paper and snow, deep winter for a few moments */
+@theme {
+  --color-snow: #f9fcfe;
+  --color-paper: #f4f8fa;
+  --color-frost: #e8f3f8;
+  --color-ice: #c9e8f6;
+  --color-glacier: #83cbe9;
+  --color-sky: #4caedc;
+  --color-deep: #17334b;
+  --color-midnight: #102333;
+  --color-muted: #718493;
+  --color-warm: #f3c979;
+  --color-pine: #426e61;
+  --color-hairline: #d9e6ee;
+
+  --font-display: var(--font-instrument), "Times New Roman", serif;
+  --font-sans: var(--font-manrope), system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+}
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 5rem;
+}
+
+body {
+  background: var(--color-paper);
+  color: var(--color-deep);
+  font-family: var(--font-sans);
+  font-feature-settings: "ss01";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: var(--color-ice);
+  color: var(--color-midnight);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-sky);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+/* A small uppercase technical label */
+.label {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+/* Display headlines: tight, with room for an italic word */
+.display {
+  font-family: var(--font-display);
+  font-weight: 400;
+  line-height: 0.95;
+  letter-spacing: -0.015em;
+}
+.display em {
+  font-style: italic;
+  letter-spacing: -0.01em;
+}
+
+/* Screenshots sit on the page like prints: a fine edge and a soft shadow, never a thick frame */
+.print {
+  border-radius: 14px;
+  box-shadow:
+    0 0 0 1px rgb(23 51 75 / 0.08),
+    0 30px 60px -30px rgb(16 35 51 / 0.45),
+    0 12px 24px -18px rgb(16 35 51 / 0.3);
+}
+
+/* Snowfall: each flake's track is as tall as its container, so translateY(100%) is the bottom */
+.flake-track {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  width: 0;
+  animation: flake-fall var(--dur) linear var(--delay) infinite;
+  transform: translateY(var(--rest));
+  will-change: transform;
+}
+.flake {
+  display: block;
+  width: var(--size);
+  height: var(--size);
+  margin-left: calc(var(--size) / -2);
+  border-radius: 999px;
+  background: var(--flake-color, #fff);
+  opacity: var(--alpha);
+  filter: blur(var(--blur));
+  animation: flake-sway var(--sway-dur) ease-in-out var(--delay) infinite alternate;
+}
+@keyframes flake-fall {
+  from { transform: translateY(-4%); }
+  to { transform: translateY(102%); }
+}
+@keyframes flake-sway {
+  from { transform: translateX(calc(var(--drift) * -1)); }
+  to { transform: translateX(var(--drift)); }
+}
+
+/* Fairy light bulbs: a slow, uneven twinkle */
+.twinkle {
+  animation: twinkle var(--tw, 2.8s) ease-in-out var(--twd, 0s) infinite;
+}
+@keyframes twinkle {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+/* Sections fade up a touch as they arrive (where the browser supports scroll-driven animations) */
+@supports (animation-timeline: view()) {
+  .arrive {
+    animation: arrive linear both;
+    animation-timeline: view();
+    animation-range: entry 0% entry 40%;
+  }
+  @keyframes arrive {
+    from { opacity: 0; transform: translateY(24px); }
+    to { opacity: 1; transform: none; }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .flake-track, .flake, .twinkle, .arrive { animation: none !important; }
+}
