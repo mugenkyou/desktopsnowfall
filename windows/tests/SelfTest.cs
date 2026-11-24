@@ -66,6 +66,7 @@ static unsafe class SelfTest
         Trails();
         Snowmen();
         Stacking();
+        Swipes();
         Clicks();
         Weather();
         Visitors();
@@ -319,6 +320,23 @@ static unsafe class SelfTest
         for (int i = 1; i <= frames; i++) { w.MouseX = x0 + (tx - x0) * i / frames; w.MouseY = y0 + (ty - y0) * i / frames; Step(w, 1); }
         w.EndDrag();
         w.MouseX = w.MouseY = -999;
+    }
+
+    static void Swipes()
+    {
+        // A quick little swipe over the snow makes a snowball, and when the mouse leaves it doesn't shoot off
+        var w = Bare(out var p);
+        FillSnow(p);
+        w.MouseY = p.TopY - 2;
+        w.MouseX = 600; Step(w, 1);
+        for (int i = 0; i < 8; i++) { w.MouseX += 25; Step(w, 1); }   // 1500 px/s
+        w.MouseX = w.MouseY = -999;
+        Snowball b = null;
+        foreach (var x in w.Balls) b = x;
+        float at = b?.X ?? 0;
+        Step(w, 180);
+        float went = b == null ? 0 : MathF.Abs(b.X - at);
+        Check(b != null && w.Balls.Contains(b) && went < 80, $"a quick swipe rolls a snowball that stays close by ({went:0} px after the mouse left)");
     }
 
     static void Stacking()

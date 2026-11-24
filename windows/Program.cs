@@ -47,6 +47,7 @@ static class Cfg
     public const float BallMassRadius = 12;        // a ball this big has mass 1; mass grows with area
     public const float DriveStiffness = 400;       // how hard the cursor pulls the ball it rolls
     public const float RollFriction = 3;           // how fast a mass-1 ball stops by itself (1/s); heavy ones coast longer
+    public const float RollRelease = 120;          // the most speed (px/s) a ball keeps when the cursor stops rolling it
     public const float BallRestitution = 0.35f;    // bounciness of ball-on-ball hits (snow is soft)
     public static bool IconSnow = true;            // snow settles on the desktop icons (tray menu)
     public static bool Trails = true;              // rolling snowballs leave dents in the snow (tray menu)
@@ -1148,7 +1149,17 @@ sealed class SnowWorld
         return null;
     }
 
+    // When the cursor lets go of the ball it was rolling (the swipe ended, the mouse left the snow or moved on
+    // to another ball), the ball keeps only a gentle roll: a quick little swipe shouldn't send it flying
     void UpdateRolling(float dt)
+    {
+        var before = activeBall;
+        DriveBall(dt);
+        if (before != null && before != activeBall && before.Pile != null)
+            before.Vx = Math.Clamp(before.Vx, -Cfg.RollRelease, Cfg.RollRelease);
+    }
+
+    void DriveBall(float dt)
     {
         float mx = MouseX, my = MouseY;
         float dx = float.IsNaN(lastMx) ? 0 : mx - lastMx;
