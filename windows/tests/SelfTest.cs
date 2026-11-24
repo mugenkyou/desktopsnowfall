@@ -997,6 +997,41 @@ static unsafe class SelfTest
                   $"a snowball flies from one screen to the next without jumping, and lands there (reached x {far:0})");
         }
         {
+            // The display turns off and on (or the PC wakes up): the same screens again, the taskbar blinks away
+            var mon = new Mon(0, 0, 1920, 1080);
+            var w = Desktop(mon);
+            Func<float[]> bar = () => new[] { 1040f };
+            Run(w, 3, bar);
+            var g = w.Grounds[0];
+            var bottom = w.AddBall(g, 700, 20); var mid = w.AddBall(g, 700, 14); var head = w.AddBall(g, 700, 10);
+            mid.Below = bottom; head.Below = mid; mid.Decor = 1; head.Decor = 2;
+            Run(w, 30, bar);
+            w.SetMonitors(new List<Mon> { mon });
+            Run(w, 20, () => new[] { float.NaN });
+            Run(w, 60, bar);
+            Check(w.Grounds[0] == g && head.Below == mid && mid.Below == bottom && bottom.Pile == g && head.Decor == 2,
+                  "display off and on: the snowman on the taskbar stays standing");
+        }
+        {
+            // A maximized window covers the whole screen: the floor still shows a layer of snow
+            var w = Desktop(new Mon(0, 0, 1920, 1080));
+            var cover = new List<Win> { new Win(3, 0, 0, 1920, 1080) };
+            w.Ground.Clear();
+            Step(w, 60 * 6, cover);
+            bool shown = true;
+            foreach (bool o in w.Ground.Occ) shown &= !o;
+            Check(shown && SnowOn(w.Ground) > Cfg.GroundBase * w.Ground.Count * 0.8f, "behind a full-screen browser the floor keeps a few inches of snow");
+        }
+        {
+            // Desktop icons: snow piles up on them, flakes aren't swallowed by them, a window in front hides them
+            var w = Desktop(new Mon(0, 0, 1920, 1080));
+            var desk = new List<Win> { new Win(-1000, 40, 40, 120, 100, Icon: true) };
+            Step(w, 60 * 20, desk);
+            float onIcon = SnowOn(w.Piles[-1000]);
+            Step(w, 60, new List<Win> { new Win(5, 0, 0, 800, 600), desk[0] });
+            Check(onIcon > 20 && SnowOn(w.Piles[-1000]) == 0 && w.Lights.Count == 0, $"snow settles on desktop icons ({onIcon:0}), hidden behind windows");
+        }
+        {
             // A screen is unplugged and plugged back in
             var w = Desktop(new Mon(0, 0, 1920, 1080), new Mon(1920, 0, 3200, 1024));
             Run(w, 60 * 10);

@@ -111,7 +111,7 @@ Everything desktopsnowfall can do today, and on which platform.
 
 ### Windows tray menu
 
-- **Snow**: Light / Medium / Heavy, Wind gusts, Crystal and sparkly flakes
+- **Snow**: Light / Medium / Heavy, Wind gusts, Crystal and sparkly flakes, Snow on desktop icons
 - **Snowballs**: Normal / Large / Giant / Experimental, at most 10 / 20 / 40, Rolling trails, Snowman's nose can fall off
 - **Visitors 🐧**: Penguin, Snow fox, Rabbit, Invite one now
 - **Fairy Lights ✨** (press `L` while the menu is open)

@@ -84,7 +84,7 @@ cd desktopsnowfall/windows
 dotnet run -c Release
 ```
 
-Everything is in the ❄ menu in the system tray (bottom right, maybe behind the **^**): pause, **Snow** (amount, gusts, crystal flakes), **Snowballs** (size, how many, trails, falling nose), **Visitors** (each animal, or invite one now), **Fairy Lights** and **Light style**, **Performance** (smooth 60 fps or battery saver 30 fps, and saving power when unplugged), **Start with Windows**, **Reset all settings**, How to Play, and Quit. Your choices are remembered.
+Everything is in the ❄ menu in the system tray (bottom right, maybe behind the **^**): pause, **Snow** (amount, gusts, crystal flakes, snow on desktop icons), **Snowballs** (size, how many, trails, falling nose), **Visitors** (each animal, or invite one now), **Fairy Lights** and **Light style**, **Performance** (smooth 60 fps or battery saver 30 fps, and saving power when unplugged), **Start with Windows**, **Reset all settings**, How to Play, and Quit. Your choices are remembered.
 
 ## Troubleshooting 🔧
 

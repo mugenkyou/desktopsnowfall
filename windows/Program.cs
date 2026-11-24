@@ -29,6 +29,7 @@ static class Cfg
     public const float GroundPileMax = 34;         // max snow height at the bottom of the screen
     public const float TaskbarPileMax = 18;        // max snow height on the taskbar
     public const float TaskbarGain = 2.0f;         // snow on the taskbar builds up this much faster
+    public const float GroundBase = 12;            // the floor always keeps at least this much snow, even behind a browser
     public const float Gravity = 900;              // gravity for snow sliding off
     public const float PollInterval = 1f / 30f;    // how often window positions are checked (s)
     public const int MaxClumps = 900;              // max number of falling snow clumps at once
@@ -49,6 +50,7 @@ static class Cfg
     public const float DriveStiffness = 400;       // how hard the cursor pulls the ball it rolls
     public const float RollFriction = 3;           // how fast a mass-1 ball stops by itself (1/s); heavy ones coast longer
     public const float BallRestitution = 0.35f;    // bounciness of ball-on-ball hits (snow is soft)
+    public static bool IconSnow = true;            // snow settles on the desktop icons (tray menu)
     public static bool Trails = true;              // rolling snowballs leave dents in the snow (tray menu)
     public const float TrailLife = 2.5f;           // how long a dent takes to fade (s)
     public static bool CarrotFalls = true;         // a good knock sends the snowman's nose flying (tray menu)
@@ -204,7 +206,8 @@ static class Layout
     }
 }
 
-record struct Win(long Id, float L, float T, float R, float B)
+// Icon: a desktop icon (snow sits on it, but it doesn't hide flakes or get fairy lights)
+record struct Win(long Id, float L, float T, float R, float B, bool Icon = false)
 {
     public float Width => R - L;
     public bool Contains(float x, float y) => x >= L && x < R && y >= T && y < B;
@@ -467,6 +470,7 @@ sealed class SnowWorld
     public readonly List<Pile> Grounds = new();  // the floor: each screen's bottom edge or taskbar
     public Pile Ground => Grounds.Count > 0 ? Grounds[0] : null;   // the main screen's floor
     float[] taskbarTops = Array.Empty<float>();
+    float taskbarChangedAt = -1;                 // when the taskbars first read differently (changes must last a second)
     float pollAcc, t;
     public float T => t;
     float ballMax = Cfg.MaxRadius(1920, 1080);   // snowball size limit for this screen, refreshed every frame
@@ -508,10 +512,12 @@ sealed class SnowWorld
     // drop), and the world now spans the new desktop.
     public void SetMonitors(List<Mon> monitors)
     {
+        // Same screens again (display back on, waking from sleep): keep the taskbars, so no floor changes
+        bool same = monitors.Count == Monitors.Count && monitors.TrueForAll(m => Monitors.Contains(m));
         Monitors = monitors;
         W = 0; H = 0;
         foreach (var m in monitors) { W = MathF.Max(W, m.R); H = MathF.Max(H, m.B); }
-        taskbarTops = Array.Empty<float>();
+        if (!same) taskbarTops = Array.Empty<float>();
         BuildGrounds();
     }
 
@@ -519,7 +525,7 @@ sealed class SnowWorld
     // another screen sits directly below, there's no floor: snow falls on down into that screen.
     void BuildGrounds()
     {
-        foreach (var g in Grounds) Release(g, 0, 0, GroundId);
+        var old = new List<Pile>(Grounds);
         Grounds.Clear();
         for (int i = 0; i < Monitors.Count; i++)
         {
@@ -534,15 +540,21 @@ sealed class SnowWorld
                     if (n != m && MathF.Abs(n.T - m.B) < 2 && n.R > m.L && n.L < m.R) below.Add((MathF.Max(n.L, m.L), MathF.Min(n.R, m.R)));
             below.Sort();
             float from = m.L;
-            foreach (var (l, r) in below) { AddGround(from, l, top, taskbar); from = MathF.Max(from, r); }
-            AddGround(from, m.R, top, taskbar);
+            foreach (var (l, r) in below) { AddGround(from, l, top, taskbar, old); from = MathF.Max(from, r); }
+            AddGround(from, m.R, top, taskbar, old);
         }
+        // Only floors that really went away drop their snow (and the snowmen standing on them)
+        foreach (var g in old) Release(g, 0, 0, GroundId);
     }
 
-    void AddGround(float from, float to, float top, bool taskbar)
+    void AddGround(float from, float to, float top, bool taskbar, List<Pile> old)
     {
-        if (to - from >= 20)
-            Grounds.Add(new Pile(from, top, to - from, taskbar ? Cfg.TaskbarPileMax : Cfg.GroundPileMax) { IsGround = true, Taskbar = taskbar });
+        if (to - from < 20) return;
+        var keep = old.Find(g => g.MinX == from && g.Width == to - from && g.TopY == top && g.Taskbar == taskbar);
+        if (keep != null) { old.Remove(keep); Grounds.Add(keep); return; }
+        var p = new Pile(from, top, to - from, taskbar ? Cfg.TaskbarPileMax : Cfg.GroundPileMax) { IsGround = true, Taskbar = taskbar };
+        for (int c = 0; c < p.Count; c++) p.H[c] = MathF.Min(Cfg.GroundBase, p.Caps[c]);
+        Grounds.Add(p);
     }
 
     public bool OnScreen(float x, float y)
@@ -690,7 +702,15 @@ sealed class SnowWorld
         for (int i = 0; !changed && i < taskbars.Length; i++)
             changed = float.IsNaN(taskbars[i]) != float.IsNaN(taskbarTops[i]) ||
                       (!float.IsNaN(taskbars[i]) && MathF.Abs(taskbars[i] - taskbarTops[i]) > 1);
-        if (changed) { taskbarTops = (float[])taskbars.Clone(); BuildGrounds(); }
+        // (a taskbar that blinks away for a moment, e.g. while waking up, doesn't knock the snowmen over)
+        if (!changed) taskbarChangedAt = -1;
+        else if (taskbarTops.Length == 0 || (taskbarChangedAt >= 0 && t - taskbarChangedAt >= 1))
+        {
+            taskbarTops = (float[])taskbars.Clone();
+            taskbarChangedAt = -1;
+            BuildGrounds();
+        }
+        else if (taskbarChangedAt < 0) taskbarChangedAt = t;
 
         // Closed / minimized windows: their snow just falls
         var alive = new HashSet<long>();
@@ -734,7 +754,16 @@ sealed class SnowWorld
         ComputeOcclusion();
         UpdateLights();
         foreach (var p in Piles.Values) p.Relax();
-        foreach (var g in Grounds) g.Relax();
+        foreach (var g in Grounds)
+        {
+            // The floor slowly fills back up to its base layer (flakes over a full-screen window never reach it)
+            for (int c = 0; c < g.Count; c++)
+            {
+                float floor = MathF.Min(Cfg.GroundBase, g.Caps[c]);
+                if (g.H[c] < floor) { g.H[c] = MathF.Min(floor, g.H[c] + 3 * dt); g.Dirty = true; }
+            }
+            g.Relax();
+        }
     }
 
     // MARK: Fairy lights
@@ -747,6 +776,7 @@ sealed class SnowWorld
         for (int i = 0; i < Order.Count; i++)
         {
             var w = Order[i];
+            if (w.Icon) continue;
             alive.Add(w.Id);
             if (!Lights.TryGetValue(w.Id, out var s)) Lights[w.Id] = s = new LightString { HungAt = t, Rect = w };
             if (s.Rect != w || s.Animating(t))
@@ -1129,7 +1159,7 @@ sealed class SnowWorld
         {
             float collected = 0;
             float from = MathF.Min(b.X, newX) - b.R * 0.8f, to = MathF.Max(b.X, newX) + b.R * 0.8f;
-            float frac = MathF.Min(0.6f, 0.6f * MathF.Abs(moved) / (1.6f * b.R));
+            float frac = MathF.Min(0.25f, 0.25f * MathF.Abs(moved) / (1.6f * b.R));   // gentle: a ball grows over a few passes, not at once
             int c0 = p.Col(MathF.Max(from, p.MinX)), c1 = p.Col(MathF.Min(to, p.MinX + p.Width - 0.1f));
             if (c0 >= 0 && c1 >= c0)
             {
@@ -1832,18 +1862,7 @@ sealed class SnowWorld
                 if (o != p.Occ[c]) { p.Occ[c] = o; if (o) p.H[c] = 0; p.Dirty = true; }
             }
         }
-        // A taskbar is always in front of windows; a plain screen bottom is not
-        foreach (var g in Grounds)
-            for (int c = 0; c < g.Count; c++)
-            {
-                bool o = false;
-                if (!g.Taskbar)
-                {
-                    float x = g.ColX(c), y = g.TopY - 1;
-                    foreach (var w in Order) if (w.Contains(x, y)) { o = true; break; }
-                }
-                if (o != g.Occ[c]) { g.Occ[c] = o; if (o) g.H[c] = 0; g.Dirty = true; }
-            }
+        // The floor (taskbar or screen bottom) is always in front of windows, so its snow is never hidden
     }
 
     // A few sines at different frequencies add up to a gentle breeze; every 25-70 s a gust swells and fades
@@ -1931,7 +1950,7 @@ sealed class SnowWorld
             if (!gone)
             {
                 // Flakes that fall "behind" a window disappear
-                if (!f.InFront) foreach (var w in Order) if (w.Contains(f.X, f.Y)) { gone = true; break; }
+                if (!f.InFront) foreach (var w in Order) if (!w.Icon && w.Contains(f.X, f.Y)) { gone = true; break; }
                 if (f.Y > H + 20) gone = true;
                 if (f.Clump && (f.X < -80 || f.X > W + 80)) gone = true;
             }
@@ -2516,7 +2535,7 @@ static unsafe class Program
               CMD_LIGHT = 10, CMD_MEDIUM = 11, CMD_HEAVY = 12,
               CMD_GROWTH = 20,      // + growth mode 0..3
               CMD_MAXBALLS = 30,    // + index into MaxBallChoices
-              CMD_TRAILS = 40, CMD_CARROT = 41, CMD_GUSTS = 42, CMD_FANCY = 43,
+              CMD_TRAILS = 40, CMD_CARROT = 41, CMD_GUSTS = 42, CMD_FANCY = 43, CMD_ICONSNOW = 44,
               CMD_VISITOR = 50,     // + kind 0..2
               CMD_INVITE = 55,
               CMD_PRESET = 60,      // + preset
@@ -2597,6 +2616,15 @@ static unsafe class Program
     [DllImport("user32.dll")] static extern int GetWindowTextLengthW(IntPtr hWnd);
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hWnd, out RECT rc);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindowExW(IntPtr parent, IntPtr after, string cls, string name);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+    [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr hWnd, ref POINT p);
+    [DllImport("user32.dll")] static extern IntPtr SendMessageTimeoutW(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam, uint flags, uint ms, out IntPtr result);
+    [DllImport("kernel32.dll")] static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+    [DllImport("kernel32.dll")] static extern IntPtr VirtualAllocEx(IntPtr proc, IntPtr addr, UIntPtr size, uint type, uint protect);
+    [DllImport("kernel32.dll")] static extern bool VirtualFreeEx(IntPtr proc, IntPtr addr, UIntPtr size, uint type);
+    [DllImport("kernel32.dll")] static extern bool WriteProcessMemory(IntPtr proc, IntPtr addr, ref RECT buf, UIntPtr size, out UIntPtr written);
+    [DllImport("kernel32.dll")] static extern bool ReadProcessMemory(IntPtr proc, IntPtr addr, out RECT buf, UIntPtr size, out UIntPtr read);
     [DllImport("user32.dll")] static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr clip, MonitorEnumProc proc, IntPtr data);
     [DllImport("user32.dll")] static extern int GetSystemMetrics(int index);
     [DllImport("user32.dll")] static extern IntPtr CreatePopupMenu();
@@ -2664,6 +2692,8 @@ static unsafe class Program
     static uint taskbarCreated;               // Explorer restarted: put the tray icon back
     static IntPtr powerNotify;
     static readonly List<Win> found = new();
+    static readonly List<Win> icons = new();  // desktop icons, re-read twice a second
+    static int iconPoll;
     static readonly StringBuilder clsName = new(64);
 
     [STAThread]
@@ -2892,7 +2922,7 @@ static unsafe class Program
         double now = clock.Elapsed.TotalSeconds;
         float dt = (float)Math.Min(now - lastT, 1.0 / 20);
         lastT = now;
-        if (rebuildPending)
+        if (rebuildPending && !locked && !displayOff)   // (while the display is off the screen list can be bogus)
         {
             rebuildPending = false;
             if (world.DragBall != null) { world.EndDrag(); ReleaseCapture(); }
@@ -2964,7 +2994,46 @@ static unsafe class Program
     {
         found.Clear();
         EnumWindows(enumProc, IntPtr.Zero);       // top-level windows, front to back
+        if (++iconPoll >= 15) { iconPoll = 0; if (Cfg.IconSnow) ReadIcons(); else icons.Clear(); }   // switched off: their snow falls
+        found.AddRange(icons);                    // the desktop icons are behind every window
         return new List<Win>(found);
+    }
+
+    // Where the desktop icons are: asked from Explorer's desktop list view. Its replies go into memory in
+    // Explorer's own process, so a little is borrowed there for each answer.
+    static void ReadIcons()
+    {
+        icons.Clear();
+        IntPtr dv = FindWindowExW(FindWindowExW(IntPtr.Zero, IntPtr.Zero, "Progman", null), IntPtr.Zero, "SHELLDLL_DefView", null);
+        for (IntPtr w = IntPtr.Zero; dv == IntPtr.Zero && (w = FindWindowExW(IntPtr.Zero, w, "WorkerW", null)) != IntPtr.Zero;)
+            dv = FindWindowExW(w, IntPtr.Zero, "SHELLDLL_DefView", null);   // (with a wallpaper slideshow the icons live here)
+        IntPtr lv = dv == IntPtr.Zero ? IntPtr.Zero : FindWindowExW(dv, IntPtr.Zero, "SysListView32", null);
+        if (lv == IntPtr.Zero || !IsWindowVisible(lv)) return;            // no desktop, or "Show desktop icons" is off
+        const uint LVM_GETITEMCOUNT = 0x1004, LVM_GETITEMRECT = 0x100E, SMTO_ABORTIFHUNG = 2;
+        if (SendMessageTimeoutW(lv, LVM_GETITEMCOUNT, IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG, 100, out IntPtr count) == IntPtr.Zero) return;
+        GetWindowThreadProcessId(lv, out uint pid);
+        IntPtr proc = OpenProcess(0x8 | 0x10 | 0x20, false, pid);   // VM_OPERATION | VM_READ | VM_WRITE
+        if (proc == IntPtr.Zero) return;
+        var size = (UIntPtr)Marshal.SizeOf<RECT>();
+        IntPtr mem = VirtualAllocEx(proc, IntPtr.Zero, size, 0x3000, 0x04);   // MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE
+        if (mem != IntPtr.Zero)
+        {
+            var org = new POINT();
+            ClientToScreen(lv, ref org);
+            int n = (int)Math.Min(count.ToInt64(), 300);
+            for (int i = 0; i < n; i++)
+            {
+                var rc = new RECT { Left = 1 };   // LVIR_ICON: just the picture, not the label
+                if (!WriteProcessMemory(proc, mem, ref rc, size, out _)) break;
+                if (SendMessageTimeoutW(lv, LVM_GETITEMRECT, (IntPtr)i, mem, SMTO_ABORTIFHUNG, 50, out IntPtr ok) == IntPtr.Zero || ok == IntPtr.Zero) continue;
+                if (!ReadProcessMemory(proc, mem, out rc, size, out _)) break;
+                float l = (rc.Left + org.X - originX) / scale, t = (rc.Top + org.Y - originY) / scale;
+                float r = (rc.Right + org.X - originX) / scale, b = (rc.Bottom + org.Y - originY) / scale;
+                if (r - l >= 16 && b - t >= 16) icons.Add(new Win(-1000 - i, l, t, r, b, Icon: true));
+            }
+            VirtualFreeEx(proc, mem, UIntPtr.Zero, 0x8000);   // MEM_RELEASE
+        }
+        CloseHandle(proc);
     }
 
     static bool EnumProc(IntPtr h, IntPtr _)
@@ -3057,6 +3126,7 @@ static unsafe class Program
         AppendMenuW(amount, MF_SEPARATOR, UIntPtr.Zero, null);
         AppendMenuW(amount, MF_STRING | (Cfg.Gusts ? MF_CHECKED : 0), (UIntPtr)CMD_GUSTS, "Wind &gusts");
         AppendMenuW(amount, MF_STRING | (Cfg.FancyFlakes ? MF_CHECKED : 0), (UIntPtr)CMD_FANCY, "&Crystal and sparkly flakes");
+        AppendMenuW(amount, MF_STRING | (Cfg.IconSnow ? MF_CHECKED : 0), (UIntPtr)CMD_ICONSNOW, "Snow on desktop &icons");
         AppendMenuW(menu, MF_POPUP, (UIntPtr)(ulong)amount.ToInt64(), "S&now");
         IntPtr balls = CreatePopupMenu();
         for (int i = 0; i < 4; i++)
@@ -3175,6 +3245,10 @@ static unsafe class Program
                 Cfg.CarrotFalls = !Cfg.CarrotFalls;
                 WriteSetting("CarrotFalls", Cfg.CarrotFalls);
                 break;
+            case CMD_ICONSNOW:
+                Cfg.IconSnow = !Cfg.IconSnow;
+                WriteSetting("IconSnow", Cfg.IconSnow);
+                break;
             case CMD_TRAILS:
                 Cfg.Trails = !Cfg.Trails;
                 WriteSetting("Trails", Cfg.Trails);
@@ -3234,6 +3308,7 @@ static unsafe class Program
         int mb = ReadInt("MaxBalls", 20);
         Cfg.MaxBalls = Array.IndexOf(MaxBallChoices, mb) >= 0 ? mb : 20;
         Cfg.Trails = ReadInt("Trails", 1) != 0;
+        Cfg.IconSnow = ReadInt("IconSnow", 1) != 0;
         Cfg.CarrotFalls = ReadInt("CarrotFalls", 1) != 0;
         Cfg.Gusts = ReadInt("Gusts", 1) != 0;
         Cfg.LightPreset = Math.Clamp(ReadInt("LightPreset", 0), 0, LightLook.PresetNames.Length - 1);
