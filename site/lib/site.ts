@@ -10,7 +10,7 @@ export const site = {
   license: `${repo}/blob/main/LICENSE`,
   features: `${repo}/blob/main/FEATURES.md`,
   contributing: `${repo}/blob/main/CONTRIBUTING.md`,
-  version: "1.1.1", // the latest published release (github.com/mugenkyou/desktopsnowfall/releases/tag/v1.1.1)
+  version: "1.1.2", // the latest published release (github.com/mugenkyou/desktopsnowfall/releases/tag/v1.1.2)
   download: {
     windows: `${latest}/desktopsnowfall-setup-x64.exe`,
     windowsPortableX64: `${latest}/desktopsnowfall-win-x64-portable.zip`,
