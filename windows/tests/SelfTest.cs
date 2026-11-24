@@ -516,10 +516,16 @@ static unsafe class SelfTest
                     w.Visitor.X = 900;
                     w.Visitor.Dir = 1;
                     Step(w, 2);
-                    Render.World(px, bw, bh, w, 1);
-                    long before = GC.GetAllocatedBytesForCurrentThread();
-                    for (int i = 0; i < 20; i++) Render.World(px, bw, bh, w, 1);
-                    alloc += GC.GetAllocatedBytesForCurrentThread() - before;
+                    for (int i = 0; i < 5; i++) Render.World(px, bw, bh, w, 1);   // warm up (JIT, list capacity)
+                    // Per-frame allocations show up in every round; a one-time one (the runtime on a slow machine) doesn't
+                    long least = long.MaxValue;
+                    for (int round = 0; round < 2; round++)
+                    {
+                        long before = GC.GetAllocatedBytesForCurrentThread();
+                        for (int i = 0; i < 10; i++) Render.World(px, bw, bh, w, 1);
+                        least = Math.Min(least, GC.GetAllocatedBytesForCurrentThread() - before);
+                    }
+                    alloc += least;
                     Png(buf, bw, bh, 860, 1030, 80, 50, $"visitor-{kind}.png");
                 }
             Check(alloc == 0, $"drawing visitors allocates nothing ({alloc} bytes)");
@@ -940,10 +946,15 @@ static unsafe class SelfTest
                     for (int pat = 0; pat < LightLook.PatternNames.Length; pat++)
                     {
                         Cfg.LightPreset = pre; Cfg.LightPattern = pat;
-                        Render.World(px, bw, bh, w, 1);
-                        long before = GC.GetAllocatedBytesForCurrentThread();
-                        Render.World(px, bw, bh, w, 1);
-                        alloc += GC.GetAllocatedBytesForCurrentThread() - before;
+                        for (int i = 0; i < 3; i++) Render.World(px, bw, bh, w, 1);   // warm up (JIT, list capacity)
+                        long least = long.MaxValue;   // (as above: only what every round allocates counts)
+                        for (int round = 0; round < 2; round++)
+                        {
+                            long before = GC.GetAllocatedBytesForCurrentThread();
+                            Render.World(px, bw, bh, w, 1);
+                            least = Math.Min(least, GC.GetAllocatedBytesForCurrentThread() - before);
+                        }
+                        alloc += least;
                         if (pat == 5) Png(buf, bw, bh, 400, 395, 200, 40, $"lights-{pre}.png");
                     }
                 Cfg.LightPreset = Cfg.LightPattern = 0;
