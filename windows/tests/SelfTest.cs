@@ -65,6 +65,7 @@ static unsafe class SelfTest
         Momentum();
         Trails();
         Snowmen();
+        Stacking();
         Clicks();
         Weather();
         Visitors();
@@ -307,6 +308,62 @@ static unsafe class SelfTest
         float maxLean = 0;
         for (int i = 0; i < 180; i++) { Step(w, 1); maxLean = MathF.Max(maxLean, MathF.Abs(bottom.Wobble)); }
         return maxLean;
+    }
+
+    // Carry a ball to (tx, ty) over 'frames' frames and let go there
+    static void CarryTo(SnowWorld w, Snowball b, float tx, float ty, int frames)
+    {
+        w.MouseX = b.X; w.MouseY = b.Y;
+        w.BeginDrag(w.MouseX, w.MouseY);
+        float x0 = b.X, y0 = b.Y;
+        for (int i = 1; i <= frames; i++) { w.MouseX = x0 + (tx - x0) * i / frames; w.MouseY = y0 + (ty - y0) * i / frames; Step(w, 1); }
+        w.EndDrag();
+        w.MouseX = w.MouseY = -999;
+    }
+
+    static void Stacking()
+    {
+        {
+            // Let go well above the ball (not just touching it): it drops onto it
+            var w = Bare(out var p);
+            var bottom = w.AddBall(p, 700, 20); var top = w.AddBall(p, 400, 14);
+            Step(w, 5);
+            CarryTo(w, top, bottom.X + 12, bottom.Y - 140, 30);
+            bool hinted = w.StackHint == null;   // (cleared once let go)
+            Step(w, 90);
+            Check(top.Below == bottom && hinted, "a snowball let go high above another one falls onto it and stays");
+        }
+        {
+            // Lowered onto it at a brisk pace (faster than a gentle set-down): it still stacks instead of flying off
+            var w = Bare(out var p);
+            var bottom = w.AddBall(p, 700, 20); var top = w.AddBall(p, 400, 14);
+            Step(w, 5);
+            CarryTo(w, top, bottom.X, bottom.Y - 60, 20);   // ~900 px/s: well over the old 450 px/s "throw" limit
+            Step(w, 30);
+            Check(top.Below == bottom && !top.Thrown, "a snowball swept quickly over another one and let go stacks on it");
+        }
+        {
+            // While carrying it over a ball, that ball is marked; away from it, nothing is
+            var w = Bare(out var p);
+            var bottom = w.AddBall(p, 700, 20); var top = w.AddBall(p, 300, 14);
+            Step(w, 5);
+            w.MouseX = top.X; w.MouseY = top.Y; w.BeginDrag(w.MouseX, w.MouseY);
+            w.MouseY -= 80; Step(w, 3);
+            bool none = w.StackHint == null;
+            w.MouseX = bottom.X; w.MouseY = bottom.Y - 90; Step(w, 3);
+            Check(none && w.StackHint == bottom, "carrying a snowball over another one shows where it will stack");
+            w.EndDrag();
+        }
+        {
+            // A hard flick over a ball is still a throw
+            var w = Bare(out var p);
+            var bottom = w.AddBall(p, 700, 20); var top = w.AddBall(p, 690, 10);
+            top.Y = bottom.Y - 80; Step(w, 2);
+            w.MouseX = top.X; w.MouseY = top.Y; w.BeginDrag(w.MouseX, w.MouseY);
+            for (int i = 0; i < 6; i++) { w.MouseX += 40; Step(w, 1); }   // 2400 px/s sideways
+            w.EndDrag();
+            Check(top.Thrown && top.Below == null, "a hard flick over another snowball still throws it");
+        }
     }
 
     // E: snowman interactions

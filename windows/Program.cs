@@ -65,6 +65,8 @@ static class Cfg
     public const float VisitGapMin = 15, VisitGapMax = 40;    // then another every 15-40 s (sometimes two together)
     public const int MaxVisitors = 4;              // at most this many wandering about at once
     public const float ThrowSpeed = 450;           // letting go faster than this (px/s) throws; slower just sets the ball down
+    public const float StackReach = 160;           // a ball let go up to this far (px) above another ball stacks on it
+    public const float StackKeepSpeed = 1100;      // over another ball, only a flick faster than this (px/s) throws instead
     public const float ThrowMax = 1800;            // fastest throw (px/s)
     public const float SlingGain = 6;              // Shift-aiming: launch speed (px/s) per px the mouse is pulled back
     public const float SoftLanding = 380;          // a ball landing slower than this (px/s, ~a 80 px drop) settles instead of bursting
@@ -225,6 +227,7 @@ sealed class Snowball
     public float Wobble, WobbleV;    // tilt of a stack resting on this ball (rad, + leans right) and its speed
     public bool NoseLost;            // snowman head whose carrot was knocked off
     public bool Thrown;              // flying after a throw: bursts on whatever it hits
+    public bool SetDown;             // let go by the user (not knocked or tumbled off): lands on a ball below it
     public float ThrownAt, FromX, FromY;   // when and where it was thrown from
     public Visitor ThrownBy;         // a visitor's throw doesn't hit the thrower
     public float Mass => MathF.Max(1, R * R / (Cfg.BallMassRadius * Cfg.BallMassRadius));
@@ -239,7 +242,7 @@ sealed class Snowball
 
     public void Drop(float vx, float vy)
     {
-        Falling = true; Dragging = false; Hidden = false; Thrown = false;
+        Falling = true; Dragging = false; Hidden = false; Thrown = false; SetDown = false;
         Pile = null; Below = null;
         FromX = X; FromY = Y;
         Vx = vx; Vy = vy;
@@ -479,6 +482,7 @@ sealed class SnowWorld
     public readonly List<Carrot> Carrots = new();
     Snowball activeBall, dragBall;
     public Snowball DragBall => dragBall;
+    public Snowball StackHint;                   // while carrying: the ball it would be stacked on if let go now
     public float MouseX, MouseY;                 // cursor, set by the caller every frame
     public bool AimKey;                          // Shift held: slingshot aiming (set by the caller)
     public bool SlingUsed;                       // the slingshot has been used (then the tip isn't needed)
@@ -900,23 +904,22 @@ sealed class SnowWorld
         bool sling = aiming;
         aiming = false;
         SlingUsed |= sling;
-        if (sling || dragVx * dragVx + dragVy * dragVy > Cfg.ThrowSpeed * Cfg.ThrowSpeed)
+        StackHint = null;
+        float speed2 = dragVx * dragVx + dragVy * dragVy;
+        // Right above another ball, letting go stacks it, even while still moving the mouse a bit
+        // (only a really hard flick still throws)
+        var target = sling || speed2 > Cfg.StackKeepSpeed * Cfg.StackKeepSpeed ? null : StackTarget(b);
+        if (target == null && (sling || speed2 > Cfg.ThrowSpeed * Cfg.ThrowSpeed))
         {
             var (vx, vy) = sling ? Launch(b, launchVx, launchVy) : Launch(b, dragVx, dragVy);
             if (vx * vx + vy * vy > 60 * 60) { Throw(b, vx, vy); return; }   // a barely pulled slingshot just lets go
         }
-        var target = StackTarget(b);
-        if (target != null)
-        {
-            b.Below = target;
-            b.Vx = b.Vy = 0;
-            var st = Stack(Base(b));
-            if (st.Count == 3) { st[1].Decor = 1; st[2].Decor = 2; st[2].NoseLost = false; }   // three balls make a snowman
-        }
+        if (target != null) StackOn(b, target);
         else
         {
             // Let go: it falls (with a bit of the throw) and lands on whatever is below
             b.Drop(Math.Clamp(dragVx * 0.5f, -600, 600), Math.Clamp(dragVy * 0.5f, -400, 400));
+            b.SetDown = true;
         }
     }
 
@@ -926,6 +929,7 @@ sealed class SnowWorld
         if (AimKey)
         {
             // Slingshot: the ball stays where it is; pull the mouse back and let go to throw
+            StackHint = null;
             if (!aiming) { aiming = true; aimX = b.X; aimY = b.Y; }
             b.X = aimX; b.Y = aimY;
             launchVx = (aimX - (MouseX + dragOffX)) * Cfg.SlingGain;
@@ -948,8 +952,9 @@ sealed class SnowWorld
         }
         b.Rot += (tx - b.X) / b.R;
         b.X = tx; b.Y = ty;
-        // While it's being flicked, show where it would fly
-        if (dragVx * dragVx + dragVy * dragVy > Cfg.ThrowSpeed * Cfg.ThrowSpeed)
+        StackHint = StackTarget(b);                  // a soft ring shows where it would go
+        // While it's being flicked, show where it would fly (not when it's about to be stacked)
+        if (StackHint == null && dragVx * dragVx + dragVy * dragVy > Cfg.ThrowSpeed * Cfg.ThrowSpeed)
         {
             var (vx, vy) = Launch(b, dragVx, dragVy);
             Predict(b.X, b.Y, b.R, vx, vy);
@@ -1067,7 +1072,8 @@ sealed class SnowWorld
         }
     }
 
-    // A ball dropped just above another ball (that isn't already a full snowman) gets stacked on it
+    // A ball let go anywhere above another ball (the top of a stack that isn't a full snowman yet) gets
+    // stacked on it: roughly over it is enough, and it can be well above it
     Snowball StackTarget(Snowball b)
     {
         Snowball best = null;
@@ -1075,12 +1081,37 @@ sealed class SnowWorld
         foreach (var c in Balls)
         {
             if (c == b || c.Falling || c.Dragging || c.Hidden) continue;
-            if (Above(c) != null || Stack(Base(c)).Count >= 3) continue;
+            if (Above(c) != null || Height(c) >= 3) continue;
             float dx = MathF.Abs(b.X - c.X), dy = c.Y - b.Y;
-            if (dx >= c.R * 0.9f + b.R * 0.3f || dy <= 0 || dy >= c.R + b.R + 30) continue;
+            if (dx >= c.R + b.R * 0.6f || dy <= 0 || dy >= c.R + b.R + Cfg.StackReach) continue;
             if (dx < bestDist) { best = c; bestDist = dx; }
         }
         return best;
+    }
+
+    // How many balls high the stack is, counting down from this ball (no allocation: called every frame while carrying)
+    static int Height(Snowball top) { int n = 1; for (var x = top.Below; x != null; x = x.Below) n++; return n; }
+
+    void StackOn(Snowball b, Snowball target)
+    {
+        b.Falling = b.Thrown = false;
+        b.Pile = null;
+        b.Below = target;
+        b.Vx = b.Vy = 0;
+        var st = Stack(Base(b));
+        if (st.Count == 3) { st[1].Decor = 1; st[2].Decor = 2; st[2].NoseLost = false; }   // three balls make a snowman
+    }
+
+    // A ball set down (not thrown) that falls onto the top of another ball lands on it instead of falling through
+    Snowball CatchOnBall(Snowball b, float prevBottom)
+    {
+        foreach (var c in Balls)
+        {
+            if (!b.SetDown || c == b || c.Falling || c.Dragging || c.Hidden || Above(c) != null || Height(c) >= 3) continue;
+            float top = c.Y - c.R * 0.6f;
+            if (MathF.Abs(b.X - c.X) < c.R + b.R * 0.4f && prevBottom <= top && b.Y + b.R > top) return c;
+        }
+        return null;
     }
 
     // MARK: Snowballs
@@ -1660,7 +1691,9 @@ sealed class SnowWorld
                 b.Y += b.Vy * dt;
                 b.Rot += b.Vx * dt / b.R;
                 Pile p;
+                Snowball onto;
                 if (b.Thrown ? ThrownHit(b, px, py) : DroppedOnVisitor(b)) gone = true;
+                else if (!b.Thrown && b.Vy > 0 && (onto = CatchOnBall(b, prevBottom)) != null) StackOn(b, onto);
                 else if (b.Vy > 0 && (p = LandingSurface(b.X, prevBottom, b.Y + b.R, onEdge: true)) != null)
                 {
                     if (b.Vy < Cfg.SoftLanding && !b.Thrown) Land(b, p);   // set down gently: it stays a ball
@@ -2489,6 +2522,12 @@ unsafe static class Render
         foreach (var b in drawBalls) Ball(buf, bw, bh, b, s, w.T);
         foreach (var c in w.Carrots) Carrot(buf, bw, bh, c, s, w.T);
         foreach (var f in w.Flakes) if (!f.Clump && f.Layer == 2) Flake(buf, bw, bh, f, s, w.T);
+        // Carrying a ball over another one: a soft ring on the one it will be stacked on
+        if (w.DragBall != null && w.StackHint is { } hint && !hint.Hidden)
+        {
+            float pulse = 0.55f + 0.25f * MathF.Sin(w.T * 6);
+            Ring(buf, bw, bh, hint.X * s, hint.Y * s, (hint.R + 4) * s, 2.2f * s, pulse, 0.62f, 0.85f, 1);
+        }
         if (w.DragBall != null)
         {
             // Dotted guide of where a throw would go: bright dots with a dark rim (visible on light and dark
