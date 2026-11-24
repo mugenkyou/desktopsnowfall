@@ -29,13 +29,11 @@ static class Cfg
     public const float GroundPileMax = 34;         // max snow height at the bottom of the screen
     public const float TaskbarPileMax = 18;        // max snow height on the taskbar
     public const float TaskbarGain = 2.0f;         // snow on the taskbar builds up this much faster
-    public const float GroundBase = 12;            // the floor always keeps at least this much snow, even behind a browser
+    public const float GroundBase = 12;            // the floor always keeps at least this much snow where it can be seen
     public const float Gravity = 900;              // gravity for snow sliding off
     public const float PollInterval = 1f / 30f;    // how often window positions are checked (s)
     public const int MaxClumps = 900;              // max number of falling snow clumps at once
     public const float FallSpeed = 1.5f;           // falling speed multiplier
-    public const bool FlakesInFront = true;        // some of the smallest flakes fall in front of windows
-    public const float InFrontFraction = 0.4f;     // share of the smallest layer that falls in front
     public const int FrameMs = 16;                 // timer interval (~60 fps)
     public const int SaverFrameMs = 33;            // battery saver: ~30 fps
     public static int PerfMode = 0;                // 0 smooth (60 fps), 1 battery saver (30 fps) (tray menu)
@@ -111,7 +109,6 @@ sealed class Flake
     public float SwayAmp, SwayFreq = 1, Phase, WindFactor = 1;
     public int Layer;                // 0 far, 1 middle, 2 near
     public bool Clump;               // sliding off a surface (affected by gravity)
-    public bool InFront;             // falls in front of windows
     public bool Crystal, Sparkle;    // drawn as a turning six-armed crystal / glints now and then
     public long IgnoreId = -1;       // don't land right back on the surface it came from
     public float IgnoreUntil;
@@ -612,7 +609,6 @@ sealed class SnowWorld
         var L = Layers[li];
         f.Layer = li;
         f.Clump = false;
-        f.InFront = Cfg.FlakesInFront && li == 0 && Rnd.F(0, 1) < Cfg.InFrontFraction;
         f.IgnoreId = -1;
         f.Size = Rnd.F(L.SizeMin, L.SizeMax);
         f.Vx = 0;
@@ -633,7 +629,6 @@ sealed class SnowWorld
     {
         var f = Obtain();
         f.Clump = true;
-        f.InFront = false;
         f.Crystal = f.Sparkle = false;
         f.Layer = 2;
         f.Size = Rnd.F(2.5f, 5);
@@ -738,11 +733,13 @@ sealed class SnowWorld
                 }
                 else if (MathF.Abs(old.L - r.L) > 0.3f || MathF.Abs(old.T - r.T) > 0.3f)
                 {
-                    // Window dragged: fling the snow off
+                    // Window dragged: fling the snow off. An icon jumps (moved, or one before it deleted):
+                    // its snow just drops where it was.
                     float vx = (r.L - old.L) / dt, vy = (r.T - old.T) / dt;
+                    if (r.Icon) Release(pile, 0, 0, r.Id);
                     pile.MinX = r.L;
                     pile.TopY = r.T;
-                    Release(pile, vx, vy, r.Id);
+                    if (!r.Icon) Release(pile, vx, vy, r.Id);
                 }
             }
             else
@@ -762,7 +759,7 @@ sealed class SnowWorld
             for (int c = 0; c < g.Count; c++)
             {
                 float floor = MathF.Min(Cfg.GroundBase, g.Caps[c]);
-                if (g.H[c] < floor) { g.H[c] = MathF.Min(floor, g.H[c] + 3 * dt); g.Dirty = true; }
+                if (!g.Occ[c] && g.H[c] < floor) { g.H[c] = MathF.Min(floor, g.H[c] + 3 * dt); g.Dirty = true; }
             }
             g.Relax();
         }
@@ -1884,7 +1881,18 @@ sealed class SnowWorld
                 if (o != p.Occ[c]) { p.Occ[c] = o; if (o) p.H[c] = 0; p.Dirty = true; }
             }
         }
-        // The floor (taskbar or screen bottom) is always in front of windows, so its snow is never hidden
+        // A taskbar is always in front of windows; a plain screen bottom is not (no snow is drawn over apps)
+        foreach (var g in Grounds)
+            for (int c = 0; c < g.Count; c++)
+            {
+                bool o = false;
+                if (!g.Taskbar)
+                {
+                    float x = g.ColX(c), y = g.TopY - 1;
+                    foreach (var w in Order) if (!w.Icon && w.Contains(x, y)) { o = true; break; }
+                }
+                if (o != g.Occ[c]) { g.Occ[c] = o; if (o) g.H[c] = 0; g.Dirty = true; }
+            }
     }
 
     // A few sines at different frequencies add up to a gentle breeze; every 25-70 s a gust swells and fades
@@ -1938,8 +1946,7 @@ sealed class SnowWorld
             bool gone = false;
             if (f.Y > prevY)
             {
-                // Window tops, front to back (flakes falling in front of windows skip them)
-                if (!f.InFront)
+                // Window tops, front to back
                 {
                     foreach (var w in Order)
                     {
@@ -1972,7 +1979,7 @@ sealed class SnowWorld
             if (!gone)
             {
                 // Flakes that fall "behind" a window disappear
-                if (!f.InFront) foreach (var w in Order) if (!w.Icon && w.Contains(f.X, f.Y)) { gone = true; break; }
+                foreach (var w in Order) if (!w.Icon && w.Contains(f.X, f.Y)) { gone = true; break; }
                 if (f.Y > H + 20) gone = true;
                 if (f.Clump && (f.X < -80 || f.X > W + 80)) gone = true;
             }

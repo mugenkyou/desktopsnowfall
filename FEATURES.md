@@ -10,7 +10,7 @@ Everything desktopsnowfall can do today, and on which platform.
 |---|:---:|:---:|
 | Three layers of flakes (near, middle, far) drifting in a gentle breeze | ✅ | ✅ |
 | Snow amount: Light / Medium / Heavy | ✅ | ✅ |
-| Some of the smallest flakes fall in front of windows | ✅ | ✅ |
+| Some of the smallest flakes fall in front of windows | ✅ | ➖ (snow never covers apps) |
 | Wind gusts that swell and die down every 25–70 s | ➖ | ✅ |
 | Crystal flakes (turning six-armed crystals among the near flakes) | ➖ | ✅ |
 | Sparkling flakes that glint now and then | ➖ | ✅ |

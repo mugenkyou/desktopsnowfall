@@ -1039,14 +1039,19 @@ static unsafe class SelfTest
                   "display off and on: the snowman on the taskbar stays standing");
         }
         {
-            // A maximized window covers the whole screen: the floor still shows a layer of snow
+            // A maximized browser above the taskbar: the taskbar keeps a layer of snow, nothing is drawn over the browser
             var w = Desktop(new Mon(0, 0, 1920, 1080));
-            var cover = new List<Win> { new Win(3, 0, 0, 1920, 1080) };
+            var cover = new List<Win> { new Win(3, 0, 0, 1920, 1040) };
+            Run(w, 3, () => new[] { 1040f });
             w.Ground.Clear();
-            Step(w, 60 * 6, cover);
-            bool shown = true;
-            foreach (bool o in w.Ground.Occ) shown &= !o;
-            Check(shown && SnowOn(w.Ground) > Cfg.GroundBase * w.Ground.Count * 0.8f, "behind a full-screen browser the floor keeps a few inches of snow");
+            for (int i = 0; i < 60 * 6; i++) w.Update(Dt, () => cover, () => new[] { 1040f });
+            Check(w.Ground.Taskbar && SnowOn(w.Ground) > Cfg.GroundBase * w.Ground.Count * 0.8f, "with a maximized browser the taskbar keeps a few inches of snow");
+            var bare = Desktop(new Mon(0, 0, 1920, 1080));
+            var full = new List<Win> { new Win(3, 0, 0, 1920, 1080) };
+            Step(bare, 60 * 6, full);
+            bool hidden = true;
+            foreach (bool o in bare.Ground.Occ) hidden &= o;
+            Check(hidden && SnowOn(bare.Ground) == 0, "no snow is drawn over an app covering the screen bottom");
         }
         {
             // Desktop icons: snow piles up on them, flakes aren't swallowed by them, a window in front hides them
@@ -1056,6 +1061,13 @@ static unsafe class SelfTest
             float onIcon = SnowOn(w.Piles[-1000]);
             Step(w, 60, new List<Win> { new Win(5, 0, 0, 800, 600), desk[0] });
             Check(onIcon > 20 && SnowOn(w.Piles[-1000]) == 0 && w.Lights.Count == 0, $"snow settles on desktop icons ({onIcon:0}), hidden behind windows");
+            // Moving the icon: its snow drops where it was instead of flying off
+            var w2 = Desktop(new Mon(0, 0, 1920, 1080));
+            Step(w2, 60 * 20, desk);
+            Step(w2, 3, new List<Win> { new Win(-1000, 900, 40, 980, 100, Icon: true) });
+            float maxV = 0, minX = 1e9f, maxX = 0;
+            foreach (var f in w2.Flakes) if (f.Clump) { maxV = MathF.Max(maxV, MathF.Abs(f.Vx)); minX = MathF.Min(minX, f.X); maxX = MathF.Max(maxX, f.X); }
+            Check(maxX > 0 && maxV < 60 && minX > 30 && maxX < 130, $"a moved icon's snow falls just below where it was (x {minX:0}-{maxX:0}, sideways {maxV:0} px/s)");
         }
         {
             // A screen is unplugged and plugged back in
