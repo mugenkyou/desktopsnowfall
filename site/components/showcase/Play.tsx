@@ -38,8 +38,9 @@ export function Play() {
             </h3>
             <div className="mt-6">
               <p className="text-[1.0625rem] leading-relaxed text-deep/80">
-                Slide the mouse sideways over snow, no clicking, and a snowball starts rolling and picking up what it
-                passes. Hold the left button to carry it somewhere else. Push one into another and it gets shoved
+                Press the mouse button down on the snow and slide sideways, and a snowball starts rolling and picking
+                up what it passes (on the Mac you don&rsquo;t even need to click). Press on a finished one to carry it
+                somewhere else. Push one into another and it gets shoved
                 along; on Windows a big one knocks a small one flying, and heavy balls keep rolling after you let go.
               </p>
               <div className="mt-5 flex flex-wrap gap-2">

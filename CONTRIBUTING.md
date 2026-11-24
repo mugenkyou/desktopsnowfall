@@ -64,7 +64,8 @@ Before a release, someone runs through this on a real machine:
 - [ ] Three stacked balls make a snowman; knocking it makes it wobble or fall (Windows)
 - [ ] Fairy lights hang, twinkle and follow windows; each color and pattern looks right (Windows)
 - [ ] Visitors appear, leave footprints, walk behind windows and react when hit (Windows)
-- [ ] Clicks reach the apps underneath everywhere except right on a snowball; focus never jumps to the snow
+- [ ] Clicks reach the apps underneath everywhere except right on a snowball (and on a visible layer of snow, on Windows); focus never jumps to the snow
+- [ ] Windows: moving the mouse over snow does nothing; holding the left button down on the snow and sliding rolls a snowball that grows
 - [ ] Pause, Clear snow and Quit work; Quit removes the tray/menu bar icon
 - [ ] Locking the screen or opening a fullscreen video hides the snow, and it comes back afterwards (Windows)
 - [ ] Started with `--reset-welcome`, the welcome window opens after a second; Esc, Enter, Close and "Let's go snow!" close it and the snow keeps going; it doesn't come back on the next start; How to Play opens it again

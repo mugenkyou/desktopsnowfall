@@ -27,7 +27,7 @@
 
 You spend most of the day looking at the same desktop. Desktop Snowfall adds a little life to it: snow drifts down, settles on top of your windows and icons, and slides off when you move them. Leave it alone and it's a calm winter scene. Get curious and it plays along: the snow rolls into snowballs, the snowballs stack into snowmen, and every now and then a penguin wanders by.
 
-It stays out of your way. Clicks go straight through to your apps (except right on a snowball), it never takes the focus, it hides during fullscreen videos and games, and it pauses when your screen is locked. No accounts, no network, nothing to set up.
+It stays out of your way. Clicks go straight through to your apps (except on a snowball, or on the snow itself so you can roll it), it never takes the focus, it hides during fullscreen videos and games, and it pauses when your screen is locked. No accounts, no network, nothing to set up.
 
 <p align="center"><img src="assets/readme/divider.svg" width="520" alt=""></p>
 
@@ -37,7 +37,7 @@ It stays out of your way. Clicks go straight through to your apps (except right 
   <tr>
     <td width="50%" valign="top">
       <img src="assets/screenshots/aiming.png" width="100%" alt="A snowball being aimed with Shift: a dotted arc shows where it will fly, and a penguin waits on the snow">
-      <p><b>Roll it, carry it, throw it.</b> Slide the mouse sideways over snow and a snowball starts rolling and growing. Pick it up, flick, and let go. Hold <kbd>Shift</kbd> to aim like a slingshot; the dotted line shows where it lands.</p>
+      <p><b>Roll it, carry it, throw it.</b> Hold the mouse button down on the snow and slide sideways, and a snowball starts rolling and growing. Pick it up, flick, and let go. Hold <kbd>Shift</kbd> to aim like a slingshot; the dotted line shows where it lands.</p>
     </td>
     <td width="50%" valign="top">
       <img src="assets/screenshots/welcome.png" width="100%" alt="The Desktop Snowfall welcome window: a small winter scene, six features and a Let's go snow button">
@@ -62,7 +62,7 @@ Three layers of flakes (near, middle and far) drift down on a gentle breeze. Pic
 Snow settles on top of your windows (only where nothing covers them), along the bottom of the screen, and on the **taskbar** (Windows) or the **Dock** (Mac). On Windows it also gathers on your **desktop icons**, and the taskbar always keeps a few inches, even while a maximized browser fills the screen. Drag a window and its snow flies off: the faster you drag, the farther it goes. Close a window and its snow falls.
 
 ### Snowballs with weight
-Roll a snowball just by moving the mouse sideways over snow; it picks up snow and grows as it goes. On Windows they really behave like snow:
+Roll a snowball along the snow and it picks up snow and grows as it goes: on Windows, hold the left mouse button down on the snow and slide; on the Mac, just slide the mouse over it. On Windows they really behave like snow:
 
 - **Size modes:** Normal, Large, Giant, or Experimental, always kept to a small share of your screen
 - **Weight:** big balls are slow to get going and keep rolling after you let go
@@ -114,7 +114,7 @@ And six ways to twinkle: **Sparkle on & off** (with little star glints), **Gentl
 | | |
 |---|---|
 | **Start the snow** | Just open the app. A ❄ appears in the system tray (Windows, bottom right, maybe behind the **^**) or the menu bar (Mac). Everything else lives in that menu |
-| **Roll a snowball** | Slide the mouse sideways over snow, on a window, the taskbar or Dock, or the ground. No clicking |
+| **Roll a snowball** | On a window top, the taskbar or Dock, or the ground: hold the left mouse button down on the snow and slide sideways (Windows), or just slide the mouse over it (Mac) |
 | **Carry it** | Hold the left mouse button on a snowball and drag |
 | **Throw it** (Windows) | While carrying it, flick the mouse and let go |
 | **Aim it** (Windows) | While carrying it, hold <kbd>Shift</kbd>, pull the mouse back and let go, like a slingshot |
@@ -229,7 +229,7 @@ Both apps avoid extra packages on purpose: no game engine, no Electron, no NuGet
 
 **macOS: [`desktopsnowfall.swift`](desktopsnowfall.swift).** One Swift file using AppKit and SpriteKit. A transparent, borderless panel floats above your windows and lets the mouse through except over a snowball. Window positions come from `CGWindowListCopyWindowInfo` 30 times a second; the Dock's position comes from the Accessibility API. The welcome window is SwiftUI.
 
-**Windows: [`windows/Program.cs`](windows/Program.cs) and [`windows/Welcome.cs`](windows/Welcome.cs).** C# on .NET 8 talking straight to Win32, with no UI framework. Each screen gets one transparent, click-through, always-on-top layered window; the app draws every frame itself with a small software renderer (anti-aliased shapes from signed distance functions, into a premultiplied BGRA bitmap) and hands it to Windows with `UpdateLayeredWindow`. Drawing a frame allocates no memory.
+**Windows: [`windows/Program.cs`](windows/Program.cs) and [`windows/Welcome.cs`](windows/Welcome.cs).** C# on .NET 8 talking straight to Win32, with no UI framework. Each screen gets one transparent, always-on-top layered window that lets clicks through except on a snowball or a layer of snow; the app draws every frame itself with a small software renderer (anti-aliased shapes from signed distance functions, into a premultiplied BGRA bitmap) and hands it to Windows with `UpdateLayeredWindow`. Drawing a frame allocates no memory.
 
 **The snow.** Every surface (a window top, a desktop icon, the taskbar, the bottom of each screen) is a height map with one column every 3 pixels. Landing flakes add to the columns around them, steep slopes slump sideways, and columns hidden behind another window are left empty. The wind is a few slow sine waves plus an occasional gust that swells and dies down.
 

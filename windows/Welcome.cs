@@ -36,7 +36,7 @@ static unsafe class Welcome
 
     static readonly (string Title, string Text)[] Features =
     {
-        ("Roll snowballs", "Slide your mouse sideways over snow to roll a snowball. Keep moving to make it bigger."),
+        ("Roll snowballs", "Press and hold on the snow, then slide sideways. The snowball grows as it rolls."),
         ("Throw snowballs", "Pick up a snowball, flick your mouse and let go. Hold Shift to aim like a slingshot."),
         ("Build snowmen", "Stack three snowballs and create your own little snowman."),
         ("Meet winter visitors", "Watch penguins, snow foxes and rabbits wander across your desktop."),

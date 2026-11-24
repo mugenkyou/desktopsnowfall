@@ -31,7 +31,7 @@ Everything desktopsnowfall can do today, and on which platform.
 
 | Feature | macOS | Windows |
 |---|:---:|:---:|
-| Roll a snowball by sliding the mouse sideways over snow (no clicking); it grows as it rolls | ✅ | ✅ |
+| Roll a snowball along the snow; it grows as it rolls | ✅ (just slide the mouse over the snow, no clicking) | ✅ (hold the left button down on the snow and slide) |
 | Snowballs push each other; one pushed off the edge falls | ✅ | ✅ |
 | Carry a snowball with the left mouse button | ✅ | ✅ |
 | A snowball dropped from high up goes *poof* into a heap of snow | ✅ | ✅ |
@@ -86,7 +86,7 @@ Everything desktopsnowfall can do today, and on which platform.
 | Menu: ❄︎ in the menu bar / ❄ in the system tray | ✅ | ✅ |
 | Pause / resume snow | ✅ | ✅ |
 | Welcome window with a little animated winter scene and the main tricks (shown once on first launch, and from How to Play in the menu) | ✅ | ✅ |
-| Clicks pass through to your apps, except right on a snowball | ✅ | ✅ |
+| Clicks pass through to your apps, except right on a snowball (and, on Windows, on a visible layer of snow, so it can be rolled) | ✅ | ✅ |
 | Grabbing a snowball never takes focus from the app you're using | ✅ | ✅ |
 | Settings remembered between launches | Fairy lights only | All options (registry) |
 | Reset all settings | ➖ | ✅ |

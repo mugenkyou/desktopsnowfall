@@ -39,10 +39,11 @@ static unsafe class SelfTest
 
     static void FillSnow(Pile p) { for (int c = 0; c < p.Count; c++) if (!p.Occ[c]) p.H[c] = p.Caps[c]; }
 
-    // Slide the mouse sideways along the window top (the "no clicking" rolling gesture), refilling the snow
+    // Hold the button on the snow and slide sideways along the window top (the rolling gesture), refilling the snow
     static void SweepMouse(SnowWorld w, Pile p, int passes, float speed = 6)
     {
         w.MouseY = p.TopY - 2;
+        w.RollHeld = true;
         for (int k = 0; k < passes; k++)
         {
             FillSnow(p);
@@ -53,6 +54,7 @@ static unsafe class SelfTest
                 Step(w, 1);
             }
         }
+        w.RollHeld = false;
         w.MouseX = w.MouseY = -999;
     }
 
@@ -191,6 +193,7 @@ static unsafe class SelfTest
             var w = Bare(out var p);
             var b = w.AddBall(p, 600, r);
             w.MouseY = p.TopY - 2;
+            w.RollHeld = true;
             w.MouseX = 600; Step(w, 1);
             w.MouseX = 601; Step(w, 1);          // a little sideways movement grabs the ball
             w.MouseX = 640; Step(w, 6);          // then the cursor jumps 40 px ahead; look 0.1 s later
@@ -328,8 +331,10 @@ static unsafe class SelfTest
         var w = Bare(out var p);
         FillSnow(p);
         w.MouseY = p.TopY - 2;
+        w.RollHeld = true;
         w.MouseX = 600; Step(w, 1);
         for (int i = 0; i < 8; i++) { w.MouseX += 25; Step(w, 1); }   // 1500 px/s
+        w.RollHeld = false;
         w.MouseX = w.MouseY = -999;
         Snowball b = null;
         foreach (var x in w.Balls) b = x;
@@ -337,6 +342,17 @@ static unsafe class SelfTest
         Step(w, 180);
         float went = b == null ? 0 : MathF.Abs(b.X - at);
         Check(b != null && w.Balls.Contains(b) && went < 80, $"a quick swipe rolls a snowball that stays close by ({went:0} px after the mouse left)");
+
+        // Just moving the mouse over snow does nothing; holding the button down and sliding rolls one
+        var h = Bare(out var hp);
+        FillSnow(hp);
+        h.MouseY = hp.TopY - 2;
+        for (float x = 400; x < 900; x += 6) { h.MouseX = x; Step(h, 1); }
+        int hovering = h.Balls.Count;
+        Check(hovering == 0 && h.SnowAt(600, hp.TopY - 2) && !h.SnowAt(600, hp.TopY + 40),
+              "moving the mouse over snow without clicking makes no snowball (the snow itself can be pressed)");
+        SweepMouse(h, hp, 1);
+        Check(h.Balls.Count >= 1 && Biggest(h) > Cfg.BallStartRadius + 2, $"holding the button and sliding along the snow rolls a growing snowball (r = {Biggest(h):0.0})");
     }
 
     static void Stacking()

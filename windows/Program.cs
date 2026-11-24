@@ -486,6 +486,7 @@ sealed class SnowWorld
     public Snowball StackHint;                   // while carrying: the ball it would be stacked on if let go now
     public float MouseX, MouseY;                 // cursor, set by the caller every frame
     public bool AimKey;                          // Shift held: slingshot aiming (set by the caller)
+    public bool RollHeld;                        // left button held down on the snow: moving now rolls a snowball (set by the caller)
     public bool SlingUsed;                       // the slingshot has been used (then the tip isn't needed)
     bool aiming;
     float aimX, aimY, launchVx, launchVy;
@@ -1117,6 +1118,15 @@ sealed class SnowWorld
 
     // MARK: Snowballs
 
+    // Is there snow to press on right here (a visible layer of it, not the window or icon under it)?
+    public bool SnowAt(float mx, float my)
+    {
+        var p = SurfaceUnderMouse(mx, my);
+        if (p == null) return false;
+        int c = p.Col(mx);
+        return c >= 0 && !p.Occ[c] && p.H[c] >= 2 && my >= p.TopY - p.H[c] - 6 && my <= p.TopY + 1;
+    }
+
     // Is the mouse inside the snow band of this pile (a bit below the edge up to a bit above the snow)?
     static bool MouseOver(Pile p, float mx, float my)
     {
@@ -1154,7 +1164,8 @@ sealed class SnowWorld
     void UpdateRolling(float dt)
     {
         var before = activeBall;
-        DriveBall(dt);
+        if (RollHeld) DriveBall(dt);
+        else { activeBall = null; lastMx = MouseX; }   // just moving the mouse over snow does nothing
         if (before != null && before != activeBall && before.Pile != null)
             before.Vx = Math.Clamp(before.Vx, -Cfg.RollRelease, Cfg.RollRelease);
     }
@@ -2715,6 +2726,7 @@ static unsafe class Program
     [DllImport("user32.dll")] static extern bool PostMessageW(IntPtr hWnd, uint msg, IntPtr w, IntPtr l);
     [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT pt);
     [DllImport("user32.dll")] static extern short GetKeyState(int key);
+    [DllImport("user32.dll")] static extern short GetAsyncKeyState(int key);
     [DllImport("user32.dll")] static extern IntPtr CreateIconIndirect(ref ICONINFO info);
     [DllImport("user32.dll")] static extern IntPtr LoadCursorW(IntPtr inst, IntPtr name);
     [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr hdc);
@@ -2904,8 +2916,14 @@ static unsafe class Program
                     SetCapture(hWnd);                // keeps the mouse even when it moves onto another screen
                     if (!aimTipShown && !ReadSetting("UsedAim")) { aimTipShown = true; ShowAimTip(); }
                 }
+                else if (IsSurface(hWnd) && world.SnowAt(world.MouseX, world.MouseY))
+                {
+                    world.RollHeld = true;           // hold and slide along the snow to roll a snowball
+                    SetCapture(hWnd);
+                }
                 return IntPtr.Zero;
             case WM_LBUTTONUP:
+                if (world.RollHeld) { world.RollHeld = false; ReleaseCapture(); }
                 if (IsSurface(hWnd) && world.DragBall != null)
                 {
                     world.EndDrag();
@@ -2914,7 +2932,7 @@ static unsafe class Program
                 }
                 return IntPtr.Zero;
             case WM_CAPTURECHANGED:
-                if (IsSurface(hWnd)) world.EndDrag();
+                if (IsSurface(hWnd)) { world.EndDrag(); world.RollHeld = false; }
                 return IntPtr.Zero;
             case WM_DISPLAYCHANGE:              // a screen was added, removed, moved or changed resolution
             case WM_DPICHANGED:                 // display scaling changed: re-measure, no restart needed
@@ -3031,6 +3049,7 @@ static unsafe class Program
         world.MouseX = (m.X - originX) / scale;
         world.MouseY = (m.Y - originY) / scale;
         world.AimKey = (GetKeyState(0x10) & 0x8000) != 0;   // Shift: slingshot aiming
+        if (world.RollHeld && (GetAsyncKeyState(0x01) & 0x8000) == 0) world.RollHeld = false;   // (button let go somewhere we didn't hear about)
         world.Update(dt, ReadWindows, ReadTaskbars);
         UpdateMouseCapture();
 
@@ -3057,11 +3076,13 @@ static unsafe class Program
         }
     }
 
-    // The overlay normally lets every click through. Only while the mouse is over a snowball (or carrying one)
-    // does it catch clicks, so you can grab the ball without clicking the window underneath.
+    // The overlay normally lets every click through. Only while the mouse is over a snowball or a visible layer
+    // of snow (or carrying or rolling one) does it catch clicks, so you can grab the ball or roll the snow
+    // without clicking the window underneath.
     static void UpdateMouseCapture()
     {
-        bool want = world.DragBall != null || world.BallAt(world.MouseX, world.MouseY) != null;
+        bool want = world.DragBall != null || world.RollHeld || world.BallAt(world.MouseX, world.MouseY) != null ||
+                    world.SnowAt(world.MouseX, world.MouseY);   // press on the snow itself to roll it
         if (want == catching) return;
         catching = want;
         foreach (var sf in surfaces)
