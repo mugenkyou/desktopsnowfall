@@ -7,8 +7,9 @@ Thanks for wanting to make it snow better ❄️ Issues and pull requests are we
 | Path | What it is |
 |---|---|
 | `desktopsnowfall.swift` | The whole macOS app (AppKit + SpriteKit), one file |
-| `windows/Program.cs` | The whole Windows app (plain Win32 + a small software renderer), one file |
-| `windows/tests/` | Headless self-tests for the Windows app: they compile `Program.cs` and run the simulation and the renderer without opening any windows |
+| `windows/Program.cs` | The Windows app (plain Win32 + a small software renderer) |
+| `windows/Welcome.cs` | The Windows welcome window (drawn with the same renderer, text with GDI) |
+| `windows/tests/` | Headless self-tests for the Windows app: they compile `Program.cs` and `Welcome.cs` and run the simulation and the renderer without opening any windows |
 | `installer/desktopsnowfall.iss` | Windows installer (Inno Setup) |
 | `build.sh`, `make_app.sh` | Build and run on a Mac / package the `.app` |
 | `.github/workflows/` | CI on every push and pull request, and the release workflow |
@@ -66,6 +67,7 @@ Before a release, someone runs through this on a real machine:
 - [ ] Clicks reach the apps underneath everywhere except right on a snowball; focus never jumps to the snow
 - [ ] Pause, Clear snow and Quit work; Quit removes the tray/menu bar icon
 - [ ] Locking the screen or opening a fullscreen video hides the snow, and it comes back afterwards (Windows)
+- [ ] Started with `--reset-welcome`, the welcome window opens after a second; Esc, Enter, Close and "Let's go snow!" close it and the snow keeps going; it doesn't come back on the next start; How to Play opens it again
 
 ## Commit style
 

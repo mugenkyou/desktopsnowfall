@@ -73,8 +73,51 @@ static unsafe class SelfTest
         FairyLights();
         Settings();
         Screens();
+        WelcomeScreen();
         Console.WriteLine(fails == 0 ? "\nAll checks passed." : $"\n{fails} check(s) failed.");
         Environment.Exit(fails == 0 ? 0 : 1);
+    }
+
+    // The welcome window, drawn without opening it (at 100 %, 150 % and 200 % display scale)
+    static void WelcomeScreen()
+    {
+        Check(Welcome.ContentH >= 650 && Welcome.ContentH <= 780 && Welcome.W >= 540 && Welcome.W <= 620,
+              $"the welcome window has a sensible size ({Welcome.W} x {Welcome.ContentH})");
+        foreach (float s in new[] { 1f, 1.5f, 2f })
+        {
+            Welcome.Build(s, (int)(Welcome.ContentH * s));
+            Welcome.Compose(5);
+            var (gx, gy, gw, gh) = Welcome.ButtonRect(Welcome.Go);
+            uint go = Welcome.PixelAt(gx + 8, gy + gh / 2);
+            uint sky = Welcome.PixelAt(40, 70);
+            int dark = 0;
+            for (float x = 34; x < 300; x += 1) if ((Welcome.PixelAt(x, 272) & 0xFF) < 0x80) dark++;
+            Check(go == 0x319EDB && (sky & 0xFF) > ((sky >> 16) & 0xFF) && dark > 20,
+                  $"welcome at {s * 100:0}%: blue button, blue sky, dark heading text (button {go:X6}, sky {sky:X6})");
+            Check(Welcome.MostLines() <= 3 && Welcome.HeadingWidth() <= Welcome.W - 64,
+                  $"welcome at {s * 100:0}%: every feature text fits in three lines, the heading in one");
+            Check(Welcome.HitTest(gx + gw / 2, gy + gh / 2) == Welcome.Go && Welcome.HitTest(40, 280) == -1 &&
+                  Welcome.HitTest(Welcome.ButtonRect(Welcome.CloseX).X + 16, 28) == Welcome.CloseX,
+                  $"welcome at {s * 100:0}%: buttons are where they're drawn");
+            if (s == 1.5f && Environment.GetEnvironmentVariable("DSF_WELCOME_BMP") is string path) SaveBmp(path);
+            Welcome.Free();
+        }
+        Check(Welcome.NextFocus(Welcome.Go, 1) == Welcome.CloseX && Welcome.NextFocus(Welcome.CloseX, -1) == Welcome.Go &&
+              Welcome.NextFocus(Welcome.CloseX, 1) == Welcome.CloseBtn, "Tab and Shift+Tab cycle through the three buttons");
+        // A short screen: the window gets shorter and scrolls
+        Welcome.Build(1, 500);
+        Welcome.Compose(5);
+        Check(Welcome.FrameHeight == 500, "on a small screen the welcome window fits and scrolls");
+        Welcome.Free();
+    }
+
+    static void SaveBmp(string path)
+    {
+        int w = Welcome.FrameWidth, h = Welcome.FrameHeight;
+        using var f = new System.IO.BinaryWriter(System.IO.File.Create(path));
+        f.Write((ushort)0x4D42); f.Write(54 + w * h * 4); f.Write(0); f.Write(54);
+        f.Write(40); f.Write(w); f.Write(-h); f.Write((ushort)1); f.Write((ushort)32); f.Write(0); f.Write(w * h * 4); f.Write(0); f.Write(0); f.Write(0); f.Write(0);
+        for (long i = 0; i < (long)w * h; i++) f.Write(Welcome.FrameBits[i] | 0xFF000000);
     }
 
     static void Baseline()

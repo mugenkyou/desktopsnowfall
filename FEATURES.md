@@ -85,7 +85,7 @@ Everything desktopsnowfall can do today, and on which platform.
 |---|:---:|:---:|
 | Menu: ❄︎ in the menu bar / ❄ in the system tray | ✅ | ✅ |
 | Pause / resume snow | ✅ | ✅ |
-| How to Play guide (shown once on first launch, and from the menu) | ✅ | ✅ |
+| Welcome window with a little animated winter scene and the main tricks (shown once on first launch, and from How to Play in the menu) | ✅ | ✅ |
 | Clicks pass through to your apps, except right on a snowball | ✅ | ✅ |
 | Grabbing a snowball never takes focus from the app you're using | ✅ | ✅ |
 | Settings remembered between launches | Fairy lights only | All options (registry) |

@@ -7,6 +7,7 @@
 
 import Cocoa
 import SpriteKit
+import SwiftUI
 
 // MARK: - Settings (feel free to tweak)
 
@@ -1313,6 +1314,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var pauseItem: NSMenuItem!
     var lightsItem: NSMenuItem!
     var amountItems: [NSMenuItem] = []
+    var welcomeWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard let screen = NSScreen.screens.first else { return }
@@ -1340,9 +1342,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.orderFrontRegardless()
 
         setupMenu()
-        // Show the how-to-play tips once, the very first time the app opens
+        // Show the welcome window once, the very first time the app opens (it counts as seen once it's closed).
+        // "desktopsnowfall --reset-welcome" forgets that, to see it again as on a first launch.
+        if CommandLine.arguments.contains("--reset-welcome") { UserDefaults.standard.removeObject(forKey: "seenGuide") }
         if !UserDefaults.standard.bool(forKey: "seenGuide") {
-            UserDefaults.standard.set(true, forKey: "seenGuide")
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in self?.showGuide() }
         }
         NotificationCenter.default.addObserver(self, selector: #selector(screensChanged),
@@ -1427,25 +1430,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func clearSnow() { scene.clearAll() }
 
-    /// A small how-to-play note: the app has no window or Dock icon, so this is where people learn the tricks
+    /// The welcome window: what the app does and how to play (first launch, and How to Play in the menu)
     @objc func showGuide() {
-        let alert = NSAlert()
-        alert.messageText = "Welcome to desktopsnowfall ❄️"
-        alert.informativeText = """
-        It's snowing on your desktop! Here's what you can do:
-
-        ⚪  Roll a snowball: slide your mouse sideways over snow
-        🎳  Push it: roll one snowball into another
-        🖐️  Carry it: hold the left mouse button on a snowball and drag
-        ⛄  Build a snowman: stack three snowballs
-        🪟  Make snow fly: drag a window
-        ✨  Hang fairy lights: ❄︎ menu → Fairy Lights
-
-        Find everything under the ❄︎ in your menu bar. To get snow on the Dock too, allow this app in System Settings → Privacy & Security → Accessibility.
-        """
-        alert.addButton(withTitle: "Let it snow!")
         NSApp.activate(ignoringOtherApps: true)
-        alert.runModal()
+        if let w = welcomeWindow { w.makeKeyAndOrderFront(nil); return }
+        let version = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String).map { "Version \($0)" } ?? ""
+        let view = WelcomeView(version: version) { [weak self] in
+            UserDefaults.standard.set(true, forKey: "seenGuide")
+            self?.welcomeWindow?.close()
+        }
+        let visible = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame.size ?? NSSize(width: 800, height: 900)
+        let size = NSSize(width: WelcomeView.width, height: min(WelcomeView.height, visible.height - 40))
+        let w = NSWindow(contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable, .fullSizeContentView],
+                         backing: .buffered, defer: false)
+        w.title = "Welcome to desktopsnowfall"
+        w.titleVisibility = .hidden
+        w.titlebarAppearsTransparent = true
+        for b in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] { w.standardWindowButton(b)?.isHidden = true }
+        w.isMovableByWindowBackground = true
+        w.isReleasedWhenClosed = false
+        w.backgroundColor = .white
+        w.contentView = NSHostingView(rootView: view)
+        w.delegate = self
+        w.center()
+        welcomeWindow = w
+        w.makeKeyAndOrderFront(nil)
     }
 
     @objc func toggleLights() {
@@ -1456,6 +1465,396 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func screensChanged() {
         guard let screen = NSScreen.screens.first else { return }
         window.setFrame(screen.frame, display: true)
+    }
+}
+
+extension AppDelegate: NSWindowDelegate {
+    func windowWillClose(_ notification: Notification) {
+        if (notification.object as? NSWindow) === welcomeWindow { welcomeWindow = nil }
+    }
+}
+
+// MARK: - Welcome window
+
+fileprivate extension Color {
+    init(hex: UInt32, alpha: Double = 1) {
+        self.init(.sRGB, red: Double((hex >> 16) & 0xFF) / 255, green: Double((hex >> 8) & 0xFF) / 255,
+                  blue: Double(hex & 0xFF) / 255, opacity: alpha)
+    }
+}
+
+fileprivate enum WP {
+    static let snow = Color(hex: 0xFFFFFF), frost = Color(hex: 0xF5FAFE), ice = Color(hex: 0xE8F5FD)
+    static let glacier = Color(hex: 0xB9E5FA), accent = Color(hex: 0x319EDB), navy = Color(hex: 0x18364D)
+    static let slate = Color(hex: 0x698196), mint = Color(hex: 0xB8EAD9)
+    static let accentHover = Color(hex: 0x2489C6), accentDown = Color(hex: 0x1D74A8), line = Color(hex: 0xD3E5F1)
+}
+
+struct WelcomeView: View {
+    static let width: CGFloat = 600, height: CGFloat = 776
+    let version: String
+    let onDismiss: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var shown = false
+    @State private var closeHover = false
+
+    // Only what the Mac version can do
+    static let features: [(title: String, text: String)] = [
+        ("Roll snowballs", "Slide your mouse sideways over snow to roll a snowball. Keep moving to make it bigger."),
+        ("Carry snowballs", "Hold the mouse button on a snowball to pick it up, then set it down anywhere."),
+        ("Build snowmen", "Stack three snowballs and create your own little snowman."),
+        ("Make snow fly", "Drag a window and watch the snow on top of it fly off."),
+        ("Fairy lights", "Hang colorful twinkling lights along your windows."),
+        ("Gentle snowfall", "Enjoy flakes drifting down in three layers on a soft breeze."),
+    ]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                topBar
+                WelcomeHero(reduceMotion: reduceMotion)
+                    .frame(height: 168)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .padding(.horizontal, 24)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("A little winter has arrived.").font(.system(size: 30, weight: .semibold)).foregroundColor(WP.navy)
+                    Text("Your desktop is now a tiny winter wonderland.").font(.system(size: 15)).foregroundColor(WP.slate)
+                }
+                .padding(.horizontal, 32).padding(.top, 22)
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 24, alignment: .topLeading), GridItem(.flexible(), alignment: .topLeading)],
+                          alignment: .leading, spacing: 16) {
+                    ForEach(0..<6, id: \.self) { i in
+                        FeatureRow(number: i + 1, title: Self.features[i].title, text: Self.features[i].text, glyph: i)
+                    }
+                }
+                .padding(.horizontal, 32).padding(.top, 22)
+                tip.padding(.horizontal, 32).padding(.top, 18)
+                HStack(spacing: 12) {
+                    Button("Close", action: onDismiss).buttonStyle(WelcomeButtonStyle(primary: false)).frame(width: 132)
+                        .keyboardShortcut(.cancelAction)
+                    Button("Let's go snow!", action: onDismiss).buttonStyle(WelcomeButtonStyle(primary: true))
+                        .keyboardShortcut(.defaultAction)
+                }
+                .padding(.horizontal, 32).padding(.top, 20)
+                footer.padding(.top, 18)
+            }
+            .frame(width: Self.width)
+        }
+        .background(WP.snow)
+        .opacity(shown ? 1 : 0)
+        .onAppear { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.35)) { shown = true } }
+    }
+
+    var topBar: some View {
+        HStack(spacing: 10) {
+            Canvas { c, size in WelcomeArt.badge(c, CGPoint(x: size.width / 2, y: size.height / 2), size.width / 2) }
+                .frame(width: 22, height: 22)
+            Text("Desktop Snowfall").font(.system(size: 14, weight: .semibold)).foregroundColor(WP.navy)
+            Text(version).font(.system(size: 12)).foregroundColor(WP.slate)
+            Spacer()
+            Button(action: onDismiss) {
+                Canvas { c, size in
+                    let m = size.width / 2, d: CGFloat = 5.5
+                    var p = Path()
+                    p.move(to: CGPoint(x: m - d, y: m - d)); p.addLine(to: CGPoint(x: m + d, y: m + d))
+                    p.move(to: CGPoint(x: m - d, y: m + d)); p.addLine(to: CGPoint(x: m + d, y: m - d))
+                    c.stroke(p, with: .color(closeHover ? WP.navy : WP.slate), style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
+                }
+                .frame(width: 32, height: 32)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(closeHover ? WP.ice : Color.clear))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close")
+            .onHover { h in withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) { closeHover = h } }
+        }
+        .padding(.leading, 32).padding(.trailing, 24).frame(height: 56)
+    }
+
+    var tip: some View {
+        HStack(spacing: 16) {
+            Text("Dock").font(.system(size: 12, weight: .semibold)).foregroundColor(WP.navy)
+                .frame(width: 62, height: 28)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(WP.snow))
+                .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(Color(hex: 0x9ED9C4), lineWidth: 1))
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Snow on the Dock").font(.system(size: 14, weight: .semibold)).foregroundColor(WP.navy)
+                Text("Allow desktopsnowfall in System Settings \u{2192} Privacy & Security \u{2192} Accessibility.")
+                    .font(.system(size: 13)).foregroundColor(WP.slate).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(hex: 0xEEF9F5)))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color(hex: 0xCDEFE3), lineWidth: 1))
+    }
+
+    var footer: some View {
+        HStack(spacing: 8) {
+            Canvas { c, size in
+                WelcomeArt.crystal(c, CGPoint(x: size.width / 2, y: size.height / 2), 6, 1.4, WP.accent)
+            }
+            .frame(width: 14, height: 14)
+            Text("Find all your controls under the snowflake in the menu bar.").font(.system(size: 12)).foregroundColor(WP.slate)
+        }
+        .frame(maxWidth: .infinity).frame(height: 40)
+        .background(WP.frost)
+        .overlay(Rectangle().fill(Color(hex: 0xE2EEF6)).frame(height: 1), alignment: .top)
+    }
+}
+
+struct FeatureRow: View {
+    let number: Int, title: String, text: String, glyph: Int
+    var body: some View {
+        HStack(alignment: .top, spacing: 14) {
+            Canvas { c, size in WelcomeArt.glyph(c, size, glyph) }
+                .frame(width: 40, height: 40)
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(WP.ice))
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    Text(String(format: "%02d", number)).font(.system(size: 11, weight: .bold)).foregroundColor(WP.accent)
+                    Text(title).font(.system(size: 14, weight: .semibold)).foregroundColor(WP.navy)
+                }
+                Text(text).font(.system(size: 13)).foregroundColor(WP.slate).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+struct WelcomeButtonStyle: ButtonStyle {
+    let primary: Bool
+    func makeBody(configuration: Configuration) -> some View { WelcomeButtonBody(configuration: configuration, primary: primary) }
+}
+
+struct WelcomeButtonBody: View {
+    let configuration: ButtonStyleConfiguration
+    let primary: Bool
+    @State private var hovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let fill: Color = primary ? (configuration.isPressed ? WP.accentDown : (hovering ? WP.accentHover : WP.accent))
+                                  : (hovering ? WP.ice : WP.snow)
+        let border: Color = primary ? Color.clear : (hovering ? WP.glacier : WP.line)
+        return configuration.label
+            .font(.system(size: primary ? 15 : 14, weight: .semibold))
+            .foregroundColor(primary ? WP.snow : WP.navy)
+            .frame(maxWidth: .infinity, minHeight: 48)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(fill))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(border, lineWidth: 1))
+            .contentShape(Rectangle())
+            .onHover { h in withAnimation(reduceMotion ? nil : .easeOut(duration: 0.15)) { hovering = h } }
+    }
+}
+
+/// The winter scene: sky, hills, pines, a snowman, twinkling lights and a few drifting flakes
+struct WelcomeHero: View {
+    let reduceMotion: Bool
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { timeline in
+            Canvas { c, size in
+                let t = reduceMotion ? 4 : timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 3600)
+                WelcomeArt.scene(c, size, CGFloat(t))
+            }
+        }
+    }
+}
+
+/// Drawing for the welcome window, in the same shapes and colors as the Windows version
+enum WelcomeArt {
+    static let heroW: CGFloat = 552, heroH: CGFloat = 168
+
+    // 40 flakes from a fixed seed: x, y (0...1), radius, speed, opacity, phase
+    static let flakes: [(CGFloat, CGFloat, CGFloat, CGFloat, CGFloat, CGFloat)] = {
+        var seed: UInt64 = 3
+        func rnd() -> CGFloat {
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return CGFloat(seed >> 33) / CGFloat(UInt64(1) << 31)
+        }
+        var out: [(CGFloat, CGFloat, CGFloat, CGFloat, CGFloat, CGFloat)] = []
+        for _ in 0..<40 {
+            let x = rnd(), y = rnd(), r = 1.1 + 1.6 * rnd(), v = 12 + 22 * rnd(), a = 0.65 + 0.35 * rnd(), ph = 6.28 * rnd()
+            out.append((x, y, r, v, a, ph))
+        }
+        return out
+    }()
+
+    static func circle(_ c: GraphicsContext, _ x: CGFloat, _ y: CGFloat, _ r: CGFloat, _ col: Color) {
+        c.fill(Path(ellipseIn: CGRect(x: x - r, y: y - r, width: 2 * r, height: 2 * r)), with: .color(col))
+    }
+    static func ellipse(_ c: GraphicsContext, _ x: CGFloat, _ y: CGFloat, _ rx: CGFloat, _ ry: CGFloat, _ col: Color) {
+        c.fill(Path(ellipseIn: CGRect(x: x - rx, y: y - ry, width: 2 * rx, height: 2 * ry)), with: .color(col))
+    }
+    static func tri(_ c: GraphicsContext, _ a: CGPoint, _ b: CGPoint, _ d: CGPoint, _ col: Color) {
+        var p = Path()
+        p.move(to: a); p.addLine(to: b); p.addLine(to: d); p.closeSubpath()
+        c.fill(p, with: .color(col))
+    }
+    static func line(_ c: GraphicsContext, _ a: CGPoint, _ b: CGPoint, _ w: CGFloat, _ col: Color) {
+        var p = Path()
+        p.move(to: a); p.addLine(to: b)
+        c.stroke(p, with: .color(col), style: StrokeStyle(lineWidth: w, lineCap: .round))
+    }
+    static func glow(_ c: GraphicsContext, _ x: CGFloat, _ y: CGFloat, _ r: CGFloat, _ col: Color, _ a: Double) {
+        let g = Gradient(colors: [col.opacity(a), col.opacity(0)])
+        c.fill(Path(ellipseIn: CGRect(x: x - r, y: y - r, width: 2 * r, height: 2 * r)),
+               with: .radialGradient(g, center: CGPoint(x: x, y: y), startRadius: 0, endRadius: r))
+    }
+
+    static func badge(_ c: GraphicsContext, _ p: CGPoint, _ r: CGFloat) {
+        circle(c, p.x, p.y, r, WP.accent)
+        crystal(c, p, r * 0.68, max(1, r * 0.13), WP.snow)
+    }
+
+    static func crystal(_ c: GraphicsContext, _ p: CGPoint, _ arm: CGFloat, _ w: CGFloat, _ col: Color) {
+        for k in 0..<6 {
+            let a = CGFloat(k) * .pi / 3 + .pi / 2
+            line(c, p, CGPoint(x: p.x + cos(a) * arm, y: p.y + sin(a) * arm), w, col)
+            let m = CGPoint(x: p.x + cos(a) * arm * 0.58, y: p.y + sin(a) * arm * 0.58)
+            for s: CGFloat in [-1, 1] {
+                let b = a + s * 0.8
+                line(c, m, CGPoint(x: m.x + cos(b) * arm * 0.3, y: m.y + sin(b) * arm * 0.3), w * 0.85, col)
+            }
+        }
+    }
+
+    static func ball(_ c: GraphicsContext, _ x: CGFloat, _ y: CGFloat, _ r: CGFloat) {
+        circle(c, x, y, r, WP.accent)
+        circle(c, x, y, r - 1.6, WP.snow)
+    }
+
+    static func pine(_ c: GraphicsContext, _ x: CGFloat, _ base: CGFloat, _ h: CGFloat, _ col: Color) {
+        c.fill(Path(roundedRect: CGRect(x: x - 2.4, y: base - h * 0.16, width: 4.8, height: h * 0.16), cornerRadius: 1),
+               with: .color(Color(red: 0.43, green: 0.36, blue: 0.31)))
+        for k in 0..<3 {
+            let top = base - h + CGFloat(k) * h * 0.24
+            let bot = top + h * 0.46
+            let half = h * (0.2 + 0.075 * CGFloat(k))
+            tri(c, CGPoint(x: x, y: top), CGPoint(x: x - half, y: bot), CGPoint(x: x + half, y: bot), col)
+            let capY = top + (bot - top) * 0.42
+            tri(c, CGPoint(x: x, y: top), CGPoint(x: x - half * 0.42, y: capY), CGPoint(x: x + half * 0.42, y: capY), WP.snow.opacity(0.95))
+            ellipse(c, x, bot - 0.5, half * 0.92, max(1.5, h * 0.03), WP.snow.opacity(0.95))
+        }
+    }
+
+    static func wire(_ t: CGFloat) -> CGPoint { CGPoint(x: 86 + 386 * t, y: 54 + 10 * t + 72 * t * (1 - t)) }
+
+    static func scene(_ ctx: GraphicsContext, _ size: CGSize, _ t: CGFloat) {
+        var c = ctx
+        let k = size.width / heroW
+        c.scaleBy(x: k, y: k)
+        let h = size.height / k
+        let sky = Gradient(colors: [Color(hex: 0xC6E8FA), Color(hex: 0xEEF8FE)])
+        c.fill(Path(CGRect(x: 0, y: 0, width: heroW, height: h)),
+               with: .linearGradient(sky, startPoint: .zero, endPoint: CGPoint(x: 0, y: h)))
+        glow(c, 90, 10, 120, WP.mint, 0.3)
+        glow(c, 200, -10, 110, WP.mint, 0.2)
+        glow(c, 392, 40, 74, .white, 0.6)
+        circle(c, 392, 40, 14, WP.snow.opacity(0.95))
+        ellipse(c, 140, 200, 270, 74, Color(hex: 0xDCEFFA))
+        ellipse(c, 450, 208, 260, 86, Color(hex: 0xE4F3FC))
+        let far: [(CGFloat, CGFloat, CGFloat)] = [(36, 132, 44), (174, 132, 38), (414, 128, 46), (522, 132, 52), (548, 136, 36)]
+        for (x, b, ht) in far { pine(c, x, b, ht, Color(hex: 0xA9CFDF, alpha: 0.85)) }
+        ellipse(c, 276, 256, 450, 114, WP.snow)
+        ellipse(c, 470, 190, 160, 34, WP.frost.opacity(0.6))
+        let near: [(CGFloat, CGFloat, CGFloat)] = [(84, 152, 102), (130, 154, 70), (472, 152, 92)]
+        for (x, b, ht) in near {
+            ellipse(c, x + 6, b + 1, ht * 0.32, 3.5, Color(hex: 0xD5EAF5, alpha: 0.7))
+            pine(c, x, b, ht, Color(hex: 0x2F6E62))
+        }
+        snowman(c, 318, 128)
+        var wirePath = Path()
+        wirePath.move(to: wire(0))
+        for i in 1...40 { wirePath.addLine(to: wire(CGFloat(i) / 40)) }
+        c.stroke(wirePath, with: .color(WP.slate.opacity(0.55)), lineWidth: 1.1)
+        let colors = [Color(red: 0.91, green: 0.34, blue: 0.31), Color(red: 0.95, green: 0.76, blue: 0.31),
+                      Color(red: 0.36, green: 0.79, blue: 0.65), Color(red: 0.19, green: 0.62, blue: 0.86)]
+        for i in 0..<9 {
+            let p = wire((CGFloat(i) + 0.5) / 9)
+            let col = colors[i % 4]
+            let tw = 0.6 + 0.4 * sin(t * 2.1 + CGFloat(i) * 1.7)
+            glow(c, p.x, p.y + 5, 10, col, Double(0.45 * tw))
+            c.fill(Path(roundedRect: CGRect(x: p.x - 1.3, y: p.y, width: 2.6, height: 2.2), cornerRadius: 0.5), with: .color(WP.slate))
+            ellipse(c, p.x, p.y + 5, 2.6, 3.4, col)
+        }
+        for (fx, fy, r, v, a, ph) in flakes {
+            let y = (fy * (heroH + 10) + t * v).truncatingRemainder(dividingBy: heroH + 10) - 5
+            let x = fx * heroW + sin(t * 0.8 + ph) * 6
+            glow(c, x, y, r * 1.6, .white, Double(a))
+        }
+    }
+
+    static func snowman(_ c: GraphicsContext, _ x: CGFloat, _ y: CGFloat) {
+        ellipse(c, x + 4, y + 21, 28, 4.5, Color(hex: 0xD2E7F3, alpha: 0.75))
+        let hy = y - 20 - 12 * 0.82
+        let parts: [(CGFloat, CGFloat)] = [(y, 20), (hy, 12)]
+        for (cy, r) in parts {
+            let shade = Gradient(colors: [.white, Color(hex: 0xC4D2E6)])
+            c.fill(Path(ellipseIn: CGRect(x: x - r, y: cy - r, width: 2 * r, height: 2 * r)),
+                   with: .radialGradient(shade, center: CGPoint(x: x - 0.24 * r, y: cy - 0.28 * r), startRadius: 0, endRadius: 1.25 * r))
+        }
+        let stick = Color(red: 0.36, green: 0.25, blue: 0.16)
+        line(c, CGPoint(x: x - 16, y: y - 6), CGPoint(x: x - 34, y: y - 18), 1.6, stick)
+        line(c, CGPoint(x: x + 16, y: y - 6), CGPoint(x: x + 34, y: y - 18), 1.6, stick)
+        for k in 0..<3 { circle(c, x, y - 8 + CGFloat(k) * 7, 1.6, WP.navy) }
+        circle(c, x - 3.6, hy - 2.6, 1.2, WP.navy)
+        circle(c, x + 3.6, hy - 2.6, 1.2, WP.navy)
+        tri(c, CGPoint(x: x, y: hy - 0.7), CGPoint(x: x + 9, y: hy + 0.5), CGPoint(x: x, y: hy + 1.4), Color(red: 0.96, green: 0.52, blue: 0.13))
+        for k in 0..<5 {
+            let a = CGFloat.pi * (1.2 + 0.15 * CGFloat(k))
+            circle(c, x + cos(a) * 5, hy - (sin(a) * 5 - 0.6), 0.7, WP.navy)
+        }
+        let red = Color(red: 0.82, green: 0.16, blue: 0.18)
+        c.fill(Path(roundedRect: CGRect(x: x - 10.2, y: hy + 8.2, width: 20.4, height: 3.6), cornerRadius: 1.4), with: .color(red))
+        c.fill(Path(roundedRect: CGRect(x: x + 3.6, y: hy + 10.2, width: 3.4, height: 8.4), cornerRadius: 1), with: .color(red))
+    }
+
+    // The six feature pictures, drawn in a 40 x 40 tile
+    static func glyph(_ c: GraphicsContext, _ size: CGSize, _ i: Int) {
+        let cx = size.width / 2, cy = size.height / 2
+        switch i {
+        case 0:   // a ball rolling along, with speed lines
+            line(c, CGPoint(x: cx - 12, y: cy + 10), CGPoint(x: cx + 12, y: cy + 10), 1.6, WP.glacier)
+            for k in 0..<3 {
+                let dy = CGFloat(-3 + k * 4), dx = CGFloat(k * 2)
+                line(c, CGPoint(x: cx - 14 + dx, y: cy + dy), CGPoint(x: cx - 8 + dx, y: cy + dy), 1.5, WP.accent.opacity(0.8))
+            }
+            ball(c, cx + 3, cy + 1, 8.5)
+        case 1:   // a ball lifted, with a dotted line down to where it was
+            for k in 0..<4 { circle(c, cx, cy + 12 - CGFloat(k) * 4, 1.2, WP.accent.opacity(0.8)) }
+            ball(c, cx, cy - 6, 6.5)
+            line(c, CGPoint(x: cx - 10, y: cy + 14), CGPoint(x: cx + 10, y: cy + 14), 1.6, WP.glacier)
+        case 2:   // a snowman
+            ball(c, cx, cy + 6, 7.5)
+            ball(c, cx, cy - 6.5, 5.5)
+            circle(c, cx - 1.8, cy - 7.5, 0.9, WP.navy)
+            circle(c, cx + 1.8, cy - 7.5, 0.9, WP.navy)
+            tri(c, CGPoint(x: cx, y: cy - 6), CGPoint(x: cx + 5, y: cy - 5.2), CGPoint(x: cx, y: cy - 4.4), Color(red: 0.96, green: 0.52, blue: 0.13))
+        case 3:   // a window with snow flying off its top
+            c.fill(Path(roundedRect: CGRect(x: cx - 12, y: cy - 4, width: 22, height: 15), cornerRadius: 2.5), with: .color(WP.accent))
+            c.fill(Path(roundedRect: CGRect(x: cx - 10.5, y: cy - 0.5, width: 19, height: 10), cornerRadius: 1.5), with: .color(WP.snow))
+            let bits: [(CGFloat, CGFloat, CGFloat)] = [(-8, -8, 2), (-2, -11, 1.6), (4, -9, 1.8), (10, -13, 1.4), (13, -6, 1.2)]
+            for (dx, dy, r) in bits { circle(c, cx + dx, cy + dy, r, WP.accent.opacity(0.75)) }
+        case 4:   // a drooping wire with three bulbs
+            var p = Path()
+            p.move(to: CGPoint(x: cx - 13, y: cy - 7))
+            for k in 1...12 {
+                let t = CGFloat(k) / 12
+                p.addLine(to: CGPoint(x: cx - 13 + 26 * t, y: cy - 7 + 28 * t * (1 - t)))
+            }
+            c.stroke(p, with: .color(WP.slate), lineWidth: 1.3)
+            let bulbs: [(CGFloat, Color)] = [(0.22, Color(red: 0.91, green: 0.34, blue: 0.31)),
+                                             (0.5, Color(red: 0.95, green: 0.76, blue: 0.31)),
+                                             (0.78, Color(red: 0.36, green: 0.79, blue: 0.65))]
+            for (t, col) in bulbs {
+                let x = cx - 13 + 26 * t, y = cy - 7 + 28 * t * (1 - t)
+                glow(c, x, y + 6, 8, col, 0.35)
+                ellipse(c, x, y + 6, 3.2, 4.2, col)
+            }
+        default:  // a snow crystal
+            crystal(c, CGPoint(x: cx, y: cy), 12, 2, WP.accent)
+        }
     }
 }
 

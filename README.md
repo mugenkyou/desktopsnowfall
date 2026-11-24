@@ -93,6 +93,7 @@ Everything is in the ❄ menu in the system tray (bottom right, maybe behind the
 - **No snow on the Dock (Mac).** Allow **desktopsnowfall** (or **Terminal**, if you run `build.sh`) in System Settings → Privacy & Security → Accessibility, then restart the app
 - **It feels heavy on an old laptop.** ❄ → Performance → **Battery saver**, or Snow → **Light**
 - **Something's stuck.** ❄ → **Clear snow**, or **Reset all settings** (Windows)
+- **See the welcome window again.** ❄ → **How to Play**. To get it exactly as on a first launch, start the app with `--reset-welcome` (`desktopsnowfall.exe --reset-welcome`, or `./desktopsnowfall --reset-welcome` on a Mac)
 
 ## Known limitations
 

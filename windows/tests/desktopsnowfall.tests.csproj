@@ -14,6 +14,7 @@
 
   <ItemGroup>
     <Compile Include="../Program.cs" />
+    <Compile Include="../Welcome.cs" />
     <Compile Include="SelfTest.cs" />
   </ItemGroup>
 

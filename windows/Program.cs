@@ -2036,7 +2036,7 @@ unsafe static class Render
 
     // Anti-aliased fill of any shape given by its signed distance (physical px, negative inside).
     // Shapes are structs so drawing a frame allocates nothing.
-    interface ISdf { float D(float x, float y); }
+    internal interface ISdf { float D(float x, float y); }
 
     struct CircleSdf : ISdf
     {
@@ -2062,7 +2062,7 @@ unsafe static class Render
         }
     }
 
-    struct BoxSdf : ISdf
+    internal struct BoxSdf : ISdf
     {
         public float Cx, Cy, Hx, Hy, Rad;   // centre, half size minus corner radius, corner radius
         public float D(float x, float y)
@@ -2097,7 +2097,7 @@ unsafe static class Render
         }
     }
 
-    static void Fill<T>(uint* buf, int bw, int bh, float x0, float y0, float x1, float y1, in T sdf,
+    internal static void Fill<T>(uint* buf, int bw, int bh, float x0, float y0, float x1, float y1, in T sdf,
                         float alpha, float r, float g, float b) where T : struct, ISdf
     {
         int ix0 = Math.Max(0, (int)MathF.Floor(x0 - OX) - 1), ix1 = Math.Min(bw - 1, (int)MathF.Ceiling(x1 - OX) + 1);
@@ -2110,26 +2110,27 @@ unsafe static class Render
             }
     }
 
-    static void Circle(uint* buf, int bw, int bh, float cx, float cy, float r, float a, float cr, float cg, float cb) =>
+    internal static void Circle(uint* buf, int bw, int bh, float cx, float cy, float r, float a, float cr, float cg, float cb) =>
         Fill(buf, bw, bh, cx - r, cy - r, cx + r, cy + r, new CircleSdf { X = cx, Y = cy, R = r }, a, cr, cg, cb);
 
-    static void Ring(uint* buf, int bw, int bh, float cx, float cy, float r, float width, float a, float cr, float cg, float cb) =>
+    internal static void Ring(uint* buf, int bw, int bh, float cx, float cy, float r, float width, float a, float cr, float cg, float cb) =>
         Fill(buf, bw, bh, cx - r - width, cy - r - width, cx + r + width, cy + r + width,
              new RingSdf { X = cx, Y = cy, R = r, W = width }, a, cr, cg, cb);
 
-    static void Line(uint* buf, int bw, int bh, float ax, float ay, float bx, float by, float width, float a, float cr, float cg, float cb) =>
+    internal static void Line(uint* buf, int bw, int bh, float ax, float ay, float bx, float by, float width, float a, float cr, float cg, float cb) =>
         Fill(buf, bw, bh, MathF.Min(ax, bx) - width, MathF.Min(ay, by) - width, MathF.Max(ax, bx) + width, MathF.Max(ay, by) + width,
              new SegSdf { Ax = ax, Ay = ay, Bx = bx, By = by, W = width }, a, cr, cg, cb);
 
-    static void Ellipse(uint* buf, int bw, int bh, float cx, float cy, float ra, float rb, float a, float cr, float cg, float cb) =>
+    internal static void Ellipse(uint* buf, int bw, int bh, float cx, float cy, float ra, float rb, float a, float cr, float cg, float cb) =>
         Fill(buf, bw, bh, cx - ra, cy - rb, cx + ra, cy + rb, new EllipseSdf { X = cx, Y = cy, A = ra, B = rb }, a, cr, cg, cb);
 
-    static void RoundRect(uint* buf, int bw, int bh, float x0, float y0, float x1, float y1, float rad, float cr, float cg, float cb) =>
+    internal static void RoundRect(uint* buf, int bw, int bh, float x0, float y0, float x1, float y1, float rad, float cr, float cg, float cb,
+                                   float a = 1) =>
         Fill(buf, bw, bh, x0, y0, x1, y1,
              new BoxSdf { Cx = (x0 + x1) / 2, Cy = (y0 + y1) / 2, Hx = (x1 - x0) / 2 - rad, Hy = (y1 - y0) / 2 - rad, Rad = rad },
-             1, cr, cg, cb);
+             a, cr, cg, cb);
 
-    static void Triangle(uint* buf, int bw, int bh, float ax, float ay, float bx, float by, float cx, float cy, float cr, float cg, float cb,
+    internal static void Triangle(uint* buf, int bw, int bh, float ax, float ay, float bx, float by, float cx, float cy, float cr, float cg, float cb,
                          float alpha = 1) =>
         Fill(buf, bw, bh, MathF.Min(ax, MathF.Min(bx, cx)), MathF.Min(ay, MathF.Min(by, cy)),
              MathF.Max(ax, MathF.Max(bx, cx)), MathF.Max(ay, MathF.Max(by, cy)),
@@ -2468,6 +2469,7 @@ unsafe static class Render
 
     // Where this buffer sits in the world, in physical px: each screen draws its own slice of one world
     static float OX, OY;
+    internal static void Origin(float ox, float oy) { OX = ox; OY = oy; }   // (the welcome window draws at 0, 0)
 
     public static void World(uint* buf, int bw, int bh, SnowWorld w, float s, float ox = 0, float oy = 0)
     {
@@ -2552,7 +2554,6 @@ static unsafe class Program
     const int QUNS_RUNNING_D3D_FULL_SCREEN = 3, QUNS_PRESENTATION_MODE = 4;
     static readonly Guid GUID_CONSOLE_DISPLAY_STATE = new("6FE69556-704A-47A0-8F24-C28D936FDA47");
     const int MA_NOACTIVATE = 3;
-    const uint MB_ICONINFORMATION = 0x40, MB_SETFOREGROUND = 0x10000, MB_TOPMOST = 0x40000;
     const uint WM_TRAY = WM_APP + 1;
     const int SW_HIDE = 0, SW_SHOWNOACTIVATE = 4;
     const uint ULW_ALPHA = 2;
@@ -2640,7 +2641,6 @@ static unsafe class Program
     [DllImport("user32.dll")] static extern IntPtr SetWindowLongPtrW(IntPtr hWnd, int index, IntPtr value);
     [DllImport("user32.dll")] static extern IntPtr SetCapture(IntPtr hWnd);
     [DllImport("user32.dll")] static extern bool ReleaseCapture();
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int MessageBoxW(IntPtr hWnd, string text, string caption, uint type);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassNameW(IntPtr hWnd, StringBuilder sb, int max);
     [DllImport("user32.dll")] static extern int GetWindowTextLengthW(IntPtr hWnd);
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hWnd, out RECT rc);
@@ -2763,11 +2763,10 @@ static unsafe class Program
         powerNotify = RegisterPowerSettingNotification(tray, ref displayState, 0);   // display on / off
         ApplyFrameRate();
         // Show the how-to-play tips once, the very first time the app opens
-        if (!ReadSetting("SeenGuide"))
-        {
-            WriteSetting("SeenGuide", true);
-            SetTimer(tray, (UIntPtr)2, 1000, IntPtr.Zero);
-        }
+        // Show the welcome window once, the very first time the app opens (it counts as seen once it's closed).
+        // "desktopsnowfall.exe --reset-welcome" forgets that, to see it again as on a first launch.
+        if (Array.IndexOf(Environment.GetCommandLineArgs(), "--reset-welcome") > 0) WriteSetting("SeenGuide", false);
+        if (!ReadSetting("SeenGuide")) SetTimer(tray, (UIntPtr)2, 1000, IntPtr.Zero);
 
         while (GetMessageW(out var msg, IntPtr.Zero, 0, 0) > 0)
         {
@@ -3320,24 +3319,11 @@ static unsafe class Program
         Shell_NotifyIconW(NIM_MODIFY, ref nid);
     }
 
-    // The app has no window, so this is where people learn the tricks
+    // The welcome window: what the app does and how to play (first launch, and How to Play in the tray menu)
     static void ShowGuide()
     {
-        const string text =
-            "It's snowing on your desktop! Here's what you can do:\n\n" +
-            "⚪  Roll a snowball: slide your mouse sideways over snow\n" +
-            "🎳  Push it: roll one snowball into another\n" +
-            "🖐️  Carry it: hold the left mouse button on a snowball and drag\n" +
-            "🎯  Throw it: carry it, flick the mouse and let go\n" +
-            "🏹  Aim it: carry it, hold Shift, pull the mouse back and let go (a dotted line shows the path)\n" +
-            "💥  Break it: right-click a snowball\n" +
-            "⛄  Build a snowman: stack three snowballs\n" +
-            "🪟  Make snow fly: drag a window\n" +
-            "✨  Hang fairy lights: ❄ tray icon → Fairy Lights\n" +
-            "🐧  Watch for visitors: penguins, snow foxes and rabbits drop by, sometimes a few at once.\n" +
-            "      Throw a snowball at one and see what it does!\n\n" +
-            "Find everything under the ❄ icon in the system tray (bottom right).";
-        MessageBoxW(IntPtr.Zero, text, "Welcome to desktopsnowfall ❄️", MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST);
+        var ver = typeof(Program).Assembly.GetName().Version;
+        Welcome.Show(trayIcon, $"Version {ver.Major}.{ver.Minor}.{ver.Build}", () => WriteSetting("SeenGuide", true));
     }
 
     // Settings live in HKCU\Software\desktopsnowfall; values from the registry are clamped to sane ranges
@@ -3412,6 +3398,7 @@ static unsafe class Program
     static void Cleanup()
     {
         KillTimer(tray, (UIntPtr)1);
+        Welcome.Close();                       // (quitting while it's open doesn't count as having seen it)
         CloseIconProcess();                    // give Explorer its borrowed buffer back
         var nid = TrayData();
         Shell_NotifyIconW(NIM_DELETE, ref nid);
