@@ -674,6 +674,32 @@ static unsafe class SelfTest
             Check(w.VisitorHits == 2 && v.Act == VisitorAct.Tumble && v.ActT > tBefore, "a second hit mid-reaction doesn't restart it");
         }
         {
+            // A short toss (let go, not thrown) right onto an animal still hits it
+            var (w, v) = Target(0, 900);
+            var b = w.AddBall(w.Ground, v.X - 10, 7);
+            b.Y = v.Y - 60;
+            b.Drop(40, 0);
+            Step(w, 40, Open);
+            Check(w.VisitorHits == 1 && !w.Balls.Contains(b) && v.Act == VisitorAct.Tumble, "a snowball dropped on an animal from close by hits it");
+        }
+        {
+            // Right after its own habit (the fox's chase) an animal still feels a hit
+            var (w, v) = Target(1, 900);
+            v.Cool = 6;
+            ThrowAt(w, v);
+            Step(w, 30, Open);
+            Check(v.Act == VisitorAct.Leap, "an animal reacts to a hit even while its habits are cooling down");
+        }
+        {
+            // A big snowball rolling along the ground bowls an animal over
+            var (w, v) = Target(0, 900);
+            var b = w.AddBall(w.Ground, v.X - 120, 18);
+            b.Vx = 400;
+            bool hit = false;
+            for (int i = 0; i < 60 && !hit; i++) { Step(w, 1, Open); hit = v.Act == VisitorAct.Tumble; }
+            Check(hit, "a big rolling snowball knocks an animal over");
+        }
+        {
             int fights = 0;
             for (int seed = 0; seed < 12; seed++)
             {

@@ -244,6 +244,7 @@ sealed class Snowball
     {
         Falling = true; Dragging = false; Hidden = false; Thrown = false;
         Pile = null; Below = null;
+        FromX = X; FromY = Y;
         Vx = vx; Vy = vy;
     }
 }
@@ -260,6 +261,7 @@ sealed class Visitor
     public float PushDir = 1;        // which way the snowball that hit it was flying
     public float FromX, FromY;       // where that snowball was thrown from
     public float SlideV, JumpH, Cool, Hurry, NextHabit = 10, AwayUntil;
+    public float HitCool;            // a moment after a reaction before another hit counts (Cool is for its habits)
     public bool Away;                // the rabbit is hiding off-screen
     public Snowball Target;          // the ball the fox is chasing
     // drawing: which way it faces, a shake offset, and its pose (0 standing, 1 on its belly, 2 sitting, 3 flipper up)
@@ -1032,6 +1034,20 @@ sealed class SnowWorld
         return false;
     }
 
+    // A snowball let go of (not thrown: a short toss, or just dropped) still hits an animal it falls on
+    bool DroppedOnVisitor(Snowball b)
+    {
+        if (b.Vy < 60) return false;               // (still rising, or barely moving)
+        foreach (var v in Visitors)
+        {
+            if (!VisitorHit(v, b)) continue;
+            Puff(b.X, b.Y, b.R, b.Vx * 0.2f);
+            HitVisitor(v, b);
+            return true;
+        }
+        return false;
+    }
+
     // Is a snowball touching a visitor's body?
     static bool VisitorHit(Visitor v, Snowball b)
     {
@@ -1297,6 +1313,7 @@ sealed class SnowWorld
         if (!Cfg.Visitors[v.Kind]) { Visitors.Remove(v); return; }
         v.Anim += dt;
         v.Cool -= dt;
+        v.HitCool -= dt;
         v.Hurry -= dt;
         v.Jitter = 0;
         v.Pose = 0;
@@ -1309,6 +1326,11 @@ sealed class SnowWorld
             v.Dir = v.Face = v.X < 0 ? 1 : -1;
             v.Cool = 2;
         }
+        // A big snowball rolling into it bowls it over (the fox's own chase doesn't count)
+        if (!v.Reacting && v.HitCool <= 0 && v.Act is not (VisitorAct.Chase or VisitorAct.JumpOver))
+            foreach (var b in Balls)
+                if (b.R >= 14 && b.Pile != null && b.Pile.IsGround && OnSurface(b) && MathF.Abs(b.Vx) > 120 && MathF.Abs(b.X - v.X) < b.R + 8)
+                { HitVisitor(v, b); break; }
         float moved = v.Act != 0 ? StepAct(v, dt) : Wander(v, dt);
         v.X += moved;
         if (v.Act == 0 && !v.TurnedBack && v.Walking && v.X > W * 0.25f && v.X < W * 0.75f && Rnd.F(0, 1) < dt * 0.02f)
@@ -1458,8 +1480,8 @@ sealed class SnowWorld
     void HitVisitor(Visitor v, Snowball b)
     {
         VisitorHits++;
-        if (v.Reacting || v.Cool > 0) return;
-        float dir = b.Vx != 0 ? MathF.Sign(b.Vx) : MathF.Sign(v.X - b.FromX);
+        if (v.Reacting || v.HitCool > 0) return;
+        float dir = b.Vx != 0 ? MathF.Sign(b.Vx) : v.X >= b.X ? 1 : -1;   // (dropped straight down: pushed away from it)
         if (v.Kind == 0) { Begin(v, VisitorAct.Tumble, 2.6f); v.SlideV = 110; }
         else if (v.Kind == 1) Begin(v, VisitorAct.Leap, 1.9f);
         if (v.Kind != 2) { v.PushDir = dir; v.FromX = b.FromX; v.FromY = b.FromY; v.HopT = -1; v.Hop = 0; }
@@ -1558,7 +1580,7 @@ sealed class SnowWorld
         }
         if (done)
         {
-            if (v.Act is VisitorAct.Tumble or VisitorAct.Leap or VisitorAct.ThrowBack) v.Cool = 1;
+            if (v.Act is VisitorAct.Tumble or VisitorAct.Leap or VisitorAct.ThrowBack) v.Cool = v.HitCool = 1;
             if (v.Act == VisitorAct.Chase) v.Cool = 6;
             v.Act = 0;
             v.Hop = 0;
@@ -1641,7 +1663,7 @@ sealed class SnowWorld
                 b.Y += b.Vy * dt;
                 b.Rot += b.Vx * dt / b.R;
                 Pile p;
-                if (b.Thrown && ThrownHit(b, px, py)) gone = true;
+                if (b.Thrown ? ThrownHit(b, px, py) : DroppedOnVisitor(b)) gone = true;
                 else if (b.Vy > 0 && (p = LandingSurface(b.X, prevBottom, b.Y + b.R, onEdge: true)) != null)
                 {
                     if (b.Vy < Cfg.SoftLanding && !b.Thrown) Land(b, p);   // set down gently: it stays a ball
