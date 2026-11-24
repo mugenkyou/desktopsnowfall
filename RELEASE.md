@@ -1,6 +1,6 @@
 # Making a release
 
-Releases are built by GitHub Actions from a version tag. Nothing is published automatically: the workflow creates a **draft** that you check and then publish yourself.
+Releases are built and published by GitHub Actions from a version tag. There's no manual step: once the tag is pushed and the self-tests pass, the release is live and the README's download links point to it.
 
 ## 1. Get main ready
 
@@ -24,11 +24,11 @@ The **Release** workflow then:
 - builds the universal macOS `.app` zip (ad-hoc signed, not notarized)
 - drops the version from the file names (so the README's `releases/latest/download/…` links always get the newest)
 - writes `SHA256SUMS.txt`
-- creates a **draft** release with all of them and auto-generated notes
+- publishes the release with all of them and auto-generated notes, marked as the latest
 
-## 3. Publish
+## 3. Check it
 
-Open the repository's **Releases** page, check the draft (files, notes, the checksums), edit the notes if you like, and press **Publish release**.
+Open the repository's **Releases** page and try the downloads. You can still edit the notes there. If something's wrong, delete the release (and the tag), fix it, and tag again.
 
 ## What users will see (unsigned builds)
 

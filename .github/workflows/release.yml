@@ -1,7 +1,7 @@
 name: Release
 
-# Push a tag like v1.2.0 to build everything and create a DRAFT GitHub release with the downloads and
-# their SHA-256 checksums. Nothing is published until you review the draft and press "Publish".
+# Push a tag like v1.2.0 to build everything and publish a GitHub release with the downloads and their
+# SHA-256 checksums. It goes live straight away (the self-tests have to pass first).
 on:
   push:
     tags: ['v*']
@@ -56,8 +56,8 @@ jobs:
           name: macos
           path: dist/*.zip
 
-  draft:
-    name: Draft release
+  release:
+    name: Publish release
     needs: [windows, macos]
     runs-on: ubuntu-24.04
     permissions:
@@ -74,9 +74,9 @@ jobs:
       - name: Checksums
         working-directory: files
         run: sha256sum *.zip *.exe | tee SHA256SUMS.txt
-      - name: Create draft release
+      - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: >
-          gh release create "$GITHUB_REF_NAME" files/* --repo "$GITHUB_REPOSITORY" --draft
+          gh release create "$GITHUB_REF_NAME" files/* --repo "$GITHUB_REPOSITORY" --latest
           --title "desktopsnowfall $GITHUB_REF_NAME" --generate-notes
