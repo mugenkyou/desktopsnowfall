@@ -2545,7 +2545,8 @@ static unsafe class Program
     const uint WS_POPUP = 0x80000000;
     const uint WS_EX_LAYERED = 0x80000, WS_EX_TRANSPARENT = 0x20, WS_EX_TOPMOST = 0x8,
                WS_EX_TOOLWINDOW = 0x80, WS_EX_NOACTIVATE = 0x08000000;
-    const int GWL_EXSTYLE = -20;
+    const int GWL_EXSTYLE = -20, GWL_STYLE = -16;
+    const long WS_CAPTION = 0xC00000;
     const uint WM_DESTROY = 0x2, WM_TIMER = 0x113, WM_DISPLAYCHANGE = 0x7E, WM_NULL = 0,
                WM_APP = 0x8000, WM_LBUTTONDOWN = 0x201, WM_LBUTTONUP = 0x202, WM_RBUTTONDOWN = 0x204, WM_RBUTTONUP = 0x205,
                WM_MOUSEACTIVATE = 0x21, WM_CAPTURECHANGED = 0x215, WM_DPICHANGED = 0x2E0, WM_ENDSESSION = 0x16,
@@ -2923,7 +2924,8 @@ static unsafe class Program
     }
 
     // The app in front covers its whole monitor, taskbar included (a video, a game, a slideshow, F11 in a browser).
-    // A maximized window doesn't count: it leaves the taskbar visible.
+    // A maximized window doesn't count, even when it covers everything because the taskbar is set to auto-hide:
+    // it still has its title bar, which fullscreen apps take away.
     static bool ForegroundIsFullscreen()
     {
         IntPtr fg = GetForegroundWindow();
@@ -2932,6 +2934,7 @@ static unsafe class Program
         GetClassNameW(fg, clsName, clsName.Capacity);
         string cls = clsName.ToString();
         if (cls is "Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd") return false;
+        if ((GetWindowLongPtrW(fg, GWL_STYLE).ToInt64() & WS_CAPTION) == WS_CAPTION) return false;
         if (!GetWindowRect(fg, out RECT r)) return false;
         var mi = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
         if (!GetMonitorInfoW(MonitorFromWindow(fg, 2), ref mi)) return false;
