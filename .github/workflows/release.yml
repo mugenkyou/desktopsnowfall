@@ -46,7 +46,7 @@ jobs:
 
   macos:
     name: macOS build
-    runs-on: macos-14
+    runs-on: macos-latest   # (pinned versions get retired; macos-14 already was)
     steps:
       - uses: actions/checkout@v4
       - name: Build universal .app (ad-hoc signed, not notarized)

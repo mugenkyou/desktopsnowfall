@@ -57,7 +57,7 @@ jobs:
 
   macos:
     name: macOS · compile + package + launch smoke test
-    runs-on: macos-14
+    runs-on: macos-latest   # (pinned versions get retired; macos-14 already was)
     steps:
       - uses: actions/checkout@v4
 
