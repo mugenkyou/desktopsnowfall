@@ -2623,8 +2623,8 @@ static unsafe class Program
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
     [DllImport("kernel32.dll")] static extern IntPtr VirtualAllocEx(IntPtr proc, IntPtr addr, UIntPtr size, uint type, uint protect);
     [DllImport("kernel32.dll")] static extern bool VirtualFreeEx(IntPtr proc, IntPtr addr, UIntPtr size, uint type);
-    [DllImport("kernel32.dll")] static extern bool WriteProcessMemory(IntPtr proc, IntPtr addr, ref RECT buf, UIntPtr size, out UIntPtr written);
-    [DllImport("kernel32.dll")] static extern bool ReadProcessMemory(IntPtr proc, IntPtr addr, out RECT buf, UIntPtr size, out UIntPtr read);
+    [DllImport("kernel32.dll")] static extern bool WriteProcessMemory(IntPtr proc, IntPtr addr, [In] RECT[] buf, UIntPtr size, out UIntPtr written);
+    [DllImport("kernel32.dll")] static extern bool ReadProcessMemory(IntPtr proc, IntPtr addr, [Out] RECT[] buf, UIntPtr size, out UIntPtr read);
     [DllImport("user32.dll")] static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr clip, MonitorEnumProc proc, IntPtr data);
     [DllImport("user32.dll")] static extern int GetSystemMetrics(int index);
     [DllImport("user32.dll")] static extern IntPtr CreatePopupMenu();
@@ -2692,8 +2692,11 @@ static unsafe class Program
     static uint taskbarCreated;               // Explorer restarted: put the tray icon back
     static IntPtr powerNotify;
     static readonly List<Win> found = new();
-    static readonly List<Win> icons = new();  // desktop icons, re-read twice a second
-    static int iconPoll;
+    static readonly List<Win> icons = new();  // desktop icons, re-read with every window poll
+    const int MaxIcons = 300;
+    static readonly RECT[] iconRects = new RECT[MaxIcons];
+    static IntPtr iconProc, iconMem;          // Explorer's process and the buffer borrowed in it (kept open)
+    static uint iconPid;
     static readonly StringBuilder clsName = new(64);
 
     [STAThread]
@@ -2994,13 +2997,14 @@ static unsafe class Program
     {
         found.Clear();
         EnumWindows(enumProc, IntPtr.Zero);       // top-level windows, front to back
-        if (++iconPoll >= 15) { iconPoll = 0; if (Cfg.IconSnow) ReadIcons(); else icons.Clear(); }   // switched off: their snow falls
+        if (Cfg.IconSnow) ReadIcons(); else icons.Clear();   // switched off: their snow falls
         found.AddRange(icons);                    // the desktop icons are behind every window
         return new List<Win>(found);
     }
 
-    // Where the desktop icons are: asked from Explorer's desktop list view. Its replies go into memory in
-    // Explorer's own process, so a little is borrowed there for each answer.
+    // Where the desktop icons are: asked from Explorer's desktop list view. Its replies go into a buffer in
+    // Explorer's own process, opened once and kept: one write and one read per poll, so snow keeps up with
+    // an icon being dragged.
     static void ReadIcons()
     {
         icons.Clear();
@@ -3010,30 +3014,41 @@ static unsafe class Program
         IntPtr lv = dv == IntPtr.Zero ? IntPtr.Zero : FindWindowExW(dv, IntPtr.Zero, "SysListView32", null);
         if (lv == IntPtr.Zero || !IsWindowVisible(lv)) return;            // no desktop, or "Show desktop icons" is off
         const uint LVM_GETITEMCOUNT = 0x1004, LVM_GETITEMRECT = 0x100E, SMTO_ABORTIFHUNG = 2;
-        if (SendMessageTimeoutW(lv, LVM_GETITEMCOUNT, IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG, 100, out IntPtr count) == IntPtr.Zero) return;
+        if (SendMessageTimeoutW(lv, LVM_GETITEMCOUNT, IntPtr.Zero, IntPtr.Zero, SMTO_ABORTIFHUNG, 50, out IntPtr count) == IntPtr.Zero) return;
+        int n = (int)Math.Min(count.ToInt64(), MaxIcons);
+        if (n <= 0) return;
         GetWindowThreadProcessId(lv, out uint pid);
-        IntPtr proc = OpenProcess(0x8 | 0x10 | 0x20, false, pid);   // VM_OPERATION | VM_READ | VM_WRITE
-        if (proc == IntPtr.Zero) return;
-        var size = (UIntPtr)Marshal.SizeOf<RECT>();
-        IntPtr mem = VirtualAllocEx(proc, IntPtr.Zero, size, 0x3000, 0x04);   // MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE
-        if (mem != IntPtr.Zero)
+        if (pid != iconPid) { CloseIconProcess(); iconPid = pid; }      // Explorer restarted
+        if (iconProc == IntPtr.Zero)
         {
-            var org = new POINT();
-            ClientToScreen(lv, ref org);
-            int n = (int)Math.Min(count.ToInt64(), 300);
-            for (int i = 0; i < n; i++)
-            {
-                var rc = new RECT { Left = 1 };   // LVIR_ICON: just the picture, not the label
-                if (!WriteProcessMemory(proc, mem, ref rc, size, out _)) break;
-                if (SendMessageTimeoutW(lv, LVM_GETITEMRECT, (IntPtr)i, mem, SMTO_ABORTIFHUNG, 50, out IntPtr ok) == IntPtr.Zero || ok == IntPtr.Zero) continue;
-                if (!ReadProcessMemory(proc, mem, out rc, size, out _)) break;
-                float l = (rc.Left + org.X - originX) / scale, t = (rc.Top + org.Y - originY) / scale;
-                float r = (rc.Right + org.X - originX) / scale, b = (rc.Bottom + org.Y - originY) / scale;
-                if (r - l >= 16 && b - t >= 16) icons.Add(new Win(-1000 - i, l, t, r, b, Icon: true));
-            }
-            VirtualFreeEx(proc, mem, UIntPtr.Zero, 0x8000);   // MEM_RELEASE
+            iconProc = OpenProcess(0x8 | 0x10 | 0x20, false, pid);   // VM_OPERATION | VM_READ | VM_WRITE
+            if (iconProc == IntPtr.Zero) return;
+            iconMem = VirtualAllocEx(iconProc, IntPtr.Zero, (UIntPtr)(MaxIcons * 16), 0x3000, 0x04);   // MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE
         }
-        CloseHandle(proc);
+        if (iconMem == IntPtr.Zero) return;
+        var size = (UIntPtr)(n * 16);
+        for (int i = 0; i < n; i++) iconRects[i] = new RECT { Left = 1 };   // LVIR_ICON: just the picture, not the label
+        if (!WriteProcessMemory(iconProc, iconMem, iconRects, size, out _)) { CloseIconProcess(); return; }
+        int got = 0;
+        for (; got < n; got++)
+            if (SendMessageTimeoutW(lv, LVM_GETITEMRECT, (IntPtr)got, iconMem + got * 16, SMTO_ABORTIFHUNG, 50, out _) == IntPtr.Zero) break;   // Explorer busy: try again next poll
+        if (got == 0 || !ReadProcessMemory(iconProc, iconMem, iconRects, (UIntPtr)(got * 16), out _)) return;
+        var org = new POINT();
+        ClientToScreen(lv, ref org);
+        for (int i = 0; i < got; i++)
+        {
+            var rc = iconRects[i];
+            float l = (rc.Left + org.X - originX) / scale, t = (rc.Top + org.Y - originY) / scale;
+            float r = (rc.Right + org.X - originX) / scale, b = (rc.Bottom + org.Y - originY) / scale;
+            if (r - l >= 16 && b - t >= 16) icons.Add(new Win(-1000 - i, l, t, r, b, Icon: true));
+        }
+    }
+
+    static void CloseIconProcess()
+    {
+        if (iconMem != IntPtr.Zero) VirtualFreeEx(iconProc, iconMem, UIntPtr.Zero, 0x8000);   // MEM_RELEASE
+        if (iconProc != IntPtr.Zero) CloseHandle(iconProc);
+        iconProc = iconMem = IntPtr.Zero;
     }
 
     static bool EnumProc(IntPtr h, IntPtr _)
@@ -3368,6 +3383,7 @@ static unsafe class Program
     static void Cleanup()
     {
         KillTimer(tray, (UIntPtr)1);
+        CloseIconProcess();                    // give Explorer its borrowed buffer back
         var nid = TrayData();
         Shell_NotifyIconW(NIM_DELETE, ref nid);
         WTSUnRegisterSessionNotification(tray);
