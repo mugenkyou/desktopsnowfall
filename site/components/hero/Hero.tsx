@@ -1,5 +1,4 @@
 import Image from "next/image";
-import desktop from "@/public/images/screenshots/desktop.png";
 import { Snowfall } from "@/components/animations/Snowfall";
 import { Pine } from "@/components/illustrations/Landscape";
 import { site } from "@/lib/site";
@@ -8,7 +7,7 @@ import { site } from "@/lib/site";
 const notes = [
   { x: 17, y: 12, text: "A little snowfall.", side: "right" },
   { x: 54.2, y: 19, text: "Snow, settling on a desktop icon.", side: "right" },
-  { x: 35, y: 80, text: "Three snowballs later.", side: "left" },
+  { x: 13, y: 89, text: "Three snowballs later.", side: "right" },
   { x: 72, y: 94.2, text: "Winter, right on the taskbar.", side: "left" },
 ] as const;
 
@@ -63,13 +62,15 @@ export function Hero() {
 
         <figure className="relative mx-auto max-w-[1240px] px-5 md:px-8">
           <div className="relative md:ml-[14%] md:mr-[-6%]">
-            <Image
-              src={desktop}
-              alt="A real Windows desktop running Desktop Snowfall: snow falling over a dark wallpaper, snow on top of the desktop icons and along the taskbar, two snowmen, and a rabbit, a penguin and a snow fox at the bottom of the screen"
-              sizes="(min-width: 1240px) 1150px, 96vw"
-              quality={90}
-              preload
-              className="print h-auto w-full"
+            <video
+              src="/videos/mainvideo.mp4"
+              poster="/videos/mainvideo.jpg"
+              autoPlay
+              muted
+              loop
+              playsInline
+              aria-label="A real Windows desktop running Desktop Snowfall: snow falling over a dark wallpaper, snow on top of the desktop icons, snowmen, and a rabbit, a penguin and a snow fox along the taskbar"
+              className="print aspect-video h-auto w-full"
             />
             {notes.map((n) => (
               <span

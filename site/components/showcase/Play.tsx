@@ -1,6 +1,5 @@
 import Image from "next/image";
 import rolling from "@/public/images/renders/rolling.png";
-import aimTaskbar from "@/public/images/screenshots/aim-taskbar.png";
 import aimPenguin from "@/public/images/screenshots/aim-penguin.png";
 import steps from "@/public/images/renders/snowman-steps.png";
 import cast from "@/public/images/renders/cast.png";
@@ -68,7 +67,7 @@ export function Play() {
             </p>
           </div>
           <div className="relative md:col-span-8">
-            <Image src={aimTaskbar} alt="A Shift-aimed snowball: a dotted arc curves over two penguins standing on the snowy taskbar" sizes="(min-width: 1024px) 780px, 96vw" quality={90} className="print h-auto w-full" />
+            <video src="/videos/shoot.mp4" poster="/videos/shoot.jpg" autoPlay muted loop playsInline aria-label="Snowballs being thrown across a snowy Windows desktop" className="print aspect-video h-auto w-full" />
             <Image src={aimPenguin} alt="Another aimed throw, its dotted path climbing from the cursor toward the snowball, with a penguin nearby" sizes="(min-width: 1024px) 360px, 60vw" quality={90} className="print relative -mt-10 ml-auto h-auto w-[58%] md:-mt-24 md:mr-[-4%] md:w-[46%]" />
           </div>
         </article>
@@ -91,6 +90,7 @@ export function Play() {
             and stick arms. On Windows it has opinions: a gentle knock makes it wobble, a solid one sends the carrot
             flying, and a big fast snowball bowls it over.
           </p>
+          <video src="/videos/snowman.mp4" poster="/videos/snowman.jpg" autoPlay muted loop playsInline aria-label="Building a snowman on a Windows desktop, one snowball stacked on another" className="print mt-10 aspect-video h-auto w-full" />
         </article>
 
         {/* D — Visitors teaser and E — lights teaser: two uneven columns */}
