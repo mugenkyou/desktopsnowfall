@@ -16,11 +16,11 @@ export function Finale() {
         </h2>
         <p className="mt-6 max-w-sm text-[1.15rem] leading-relaxed text-snow/80">A tiny winter world, right where you work.</p>
         <div className="mt-9 flex flex-wrap items-center gap-x-6 gap-y-4">
-          <a href="#install" className="rounded-full bg-snow px-6 py-3.5 font-semibold text-deep transition-colors hover:bg-ice">
-            Download Desktop Snowfall
+          <a href={site.download.windows} className="rounded-full bg-snow px-6 py-3.5 font-semibold text-deep transition-colors hover:bg-ice">
+            Download for Windows
           </a>
-          <a href={site.repo} className="font-semibold text-snow underline decoration-snow/40 decoration-2 underline-offset-[6px] hover:decoration-warm">
-            View on GitHub
+          <a href={site.download.mac} className="font-semibold text-snow underline decoration-snow/40 decoration-2 underline-offset-[6px] hover:decoration-warm">
+            Download for macOS
           </a>
         </div>
       </div>

@@ -33,14 +33,14 @@ export function Hero() {
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-4">
               <a
-                href="#install"
+                href={site.download.windows}
                 className="group inline-flex items-center gap-3 rounded-full bg-deep py-3.5 pl-6 pr-5 font-semibold text-snow transition-colors hover:bg-midnight"
               >
-                Bring on the snow
+                Download for Windows
                 <span aria-hidden className="transition-transform group-hover:translate-y-0.5">↓</span>
               </a>
-              <a href={site.repo} className="font-semibold text-deep underline decoration-glacier decoration-2 underline-offset-[6px] hover:decoration-sky">
-                Explore the project
+              <a href={site.download.mac} className="font-semibold text-deep underline decoration-glacier decoration-2 underline-offset-[6px] hover:decoration-sky">
+                Download for macOS
               </a>
             </div>
             <p className="label mt-6 text-muted">Version {site.version} · Free for personal use</p>

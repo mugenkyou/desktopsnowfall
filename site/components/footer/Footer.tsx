@@ -17,7 +17,8 @@ export function Footer() {
         </div>
         <nav aria-label="Footer" className="grid grid-cols-2 gap-x-8 gap-y-2.5 text-[0.95rem] md:col-span-5 md:col-start-8">
           <a href={site.repo} className="hover:text-sky">GitHub</a>
-          <a href={site.releases} className="hover:text-sky">Downloads</a>
+          <a href={site.download.windows} className="hover:text-sky">Download for Windows</a>
+          <a href={site.download.mac} className="hover:text-sky">Download for macOS</a>
           <a href="#install" className="hover:text-sky">Installation</a>
           <a href={site.license} className="hover:text-sky">License</a>
           <a href={site.issues} className="hover:text-sky">Report a bug</a>
