@@ -11,7 +11,7 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <ApplicationIcon>app.ico</ApplicationIcon>
     <!-- Version shown in the tray menu and the exe's Properties; the release workflow sets it from the git tag -->
-    <Version>1.1.2</Version>
+    <Version>1.1.3</Version>
     <Product>desktopsnowfall</Product>
     <Company>mugenkyou</Company>
     <Description>Snow on your desktop</Description>

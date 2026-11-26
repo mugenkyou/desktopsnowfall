@@ -160,7 +160,7 @@ Ready-made downloads, no building needed. Every version, with its notes and chec
 
 Requirements: Windows 10 or 11, 64-bit (x64 or Arm). Nothing else to install.
 
-- **[Installer (recommended)](https://github.com/mugenkyou/desktopsnowfall/releases/latest/download/desktopsnowfall-setup-x64.exe)**: installs just for your account (no administrator needed), adds a Start menu entry, can start the snow with Windows, and uninstalls from **Settings → Apps**
+- **[Installer (recommended)](https://github.com/mugenkyou/desktopsnowfall/releases/latest/download/desktopsnowfall-setup-x64.exe)**: installs just for your account (no administrator needed), adds **Desktop Snowfall** to the Start menu and the desktop (so you can start it again after quitting), can start the snow with Windows, and uninstalls completely from **Settings → Apps → Desktop Snowfall** (the shortcuts, the autostart entry and its settings go with it)
 - **Portable, nothing to install:** [x64](https://github.com/mugenkyou/desktopsnowfall/releases/latest/download/desktopsnowfall-win-x64-portable.zip) or [Arm](https://github.com/mugenkyou/desktopsnowfall/releases/latest/download/desktopsnowfall-win-arm64-portable.zip). A single small program: unzip it anywhere and double-click
 
 The builds aren't code-signed yet, so Windows may say "Windows protected your PC": click **More info → Run anyway**. Every release lists SHA-256 checksums in `SHA256SUMS.txt`.

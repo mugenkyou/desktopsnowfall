@@ -13,9 +13,9 @@
 
 [Setup]
 AppId={{8B1F3C2E-6C2A-4F5B-9B47-3D2F9E1A7C55}
-AppName=desktopsnowfall
+AppName=Desktop Snowfall
 AppVersion={#AppVersion}
-AppVerName=desktopsnowfall {#AppVersion}
+AppVerName=Desktop Snowfall {#AppVersion}
 AppPublisher=mugenkyou
 AppPublisherURL=https://github.com/mugenkyou/desktopsnowfall
 AppSupportURL=https://github.com/mugenkyou/desktopsnowfall/issues
@@ -29,7 +29,7 @@ OutputDir=..\out
 OutputBaseFilename=desktopsnowfall-setup-x64-v{#AppVersion}
 SetupIconFile=..\windows\app.ico
 UninstallDisplayIcon={app}\desktopsnowfall.exe
-UninstallDisplayName=desktopsnowfall
+UninstallDisplayName=Desktop Snowfall
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -37,13 +37,20 @@ CloseApplications=force
 LicenseFile=..\LICENSE
 
 [Tasks]
-Name: "startup"; Description: "Start desktopsnowfall when Windows starts"; Flags: unchecked
+Name: "desktopicon"; Description: "Put a Desktop Snowfall shortcut on the desktop (to start the snow again after quitting)"
+Name: "startup"; Description: "Start Desktop Snowfall when Windows starts"; Flags: unchecked
 
 [Files]
 Source: "{#SourceExe}"; DestDir: "{app}"; Flags: ignoreversion
 
+[InstallDelete]
+; Start menu shortcut from 1.1.2 and earlier, before it was renamed
+Type: files; Name: "{autoprograms}\desktopsnowfall.lnk"
+
 [Icons]
-Name: "{autoprograms}\desktopsnowfall"; Filename: "{app}\desktopsnowfall.exe"
+; Removed again by the uninstaller (Settings -> Apps -> Desktop Snowfall -> Uninstall)
+Name: "{autoprograms}\Desktop Snowfall"; Filename: "{app}\desktopsnowfall.exe"
+Name: "{autodesktop}\Desktop Snowfall"; Filename: "{app}\desktopsnowfall.exe"; Tasks: desktopicon
 
 [Registry]
 ; Optional autostart (the same value the app's "Start with Windows" menu item uses)

@@ -66,7 +66,8 @@ export function Install() {
                 <li><b>No ❄ icon?</b> Click the <b>^</b> next to the clock and drag the ❄ onto the taskbar.</li>
                 <li><b>The snow vanished?</b> It hides while a fullscreen video or game is in front, and comes back after. Also check ❄ → Pause snow.</li>
                 <li><b>Feels heavy on an old laptop?</b> ❄ → Performance → Battery saver, or Snow → Light.</li>
-                <li><b>Uninstall:</b> Settings → Apps → desktopsnowfall.</li>
+                <li><b>Quit it and want it back?</b> Open <b>Desktop Snowfall</b> from the Start menu or the desktop shortcut. No need to download it again.</li>
+                <li><b>Uninstall:</b> Settings → Apps → Desktop Snowfall → Uninstall. That removes the app, its shortcuts, the autostart entry and its settings.</li>
               </ul>
             </details>
           </article>
