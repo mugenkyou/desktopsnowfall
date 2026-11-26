@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Instrument_Serif, Manrope, Geist_Mono } from "next/font/google";
+import Script from "next/script";
 import { site } from "@/lib/site";
 import "./globals.css";
 
@@ -50,7 +51,15 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className={`${instrument.variable} ${manrope.variable} ${geistMono.variable}`}>
-      <body className="min-h-screen overflow-x-clip">{children}</body>
+      <body className="min-h-screen overflow-x-clip">
+        {children}
+        <Script id="gtag-init" strategy="afterInteractive">
+          {`window.dataLayer = window.dataLayer || [];
+function gtag(){dataLayer.push(arguments);}
+gtag('js', new Date());`}
+        </Script>
+        <Script src="https://www.googletagmanager.com/gtm.js?id=GTM-WN6W8WLP" strategy="afterInteractive" />
+      </body>
     </html>
   );
 }
