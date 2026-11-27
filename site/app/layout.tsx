@@ -47,7 +47,6 @@ export const metadata: Metadata = {
     "desktop fairy lights",
   ],
   alternates: { canonical: "/" },
-  verification: { google: "5w8gnos2EMpvOaxww-8unXKrbq22ddUe_Wd82N-liqA" },
   openGraph: {
     type: "website",
     title: "Desktop Snowfall – Interactive Snowfall for Windows & Mac",
