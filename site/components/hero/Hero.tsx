@@ -1,4 +1,3 @@
-import Image from "next/image";
 import { Snowfall } from "@/components/animations/Snowfall";
 import { Pine } from "@/components/illustrations/Landscape";
 import { site } from "@/lib/site";
@@ -21,15 +20,15 @@ export function Hero() {
 
         <div className="mt-6 grid gap-10 lg:grid-cols-12 lg:items-end">
           <h1 className="display text-[clamp(4.2rem,13vw,10.5rem)] text-deep lg:col-span-7">
-            Let a little
+            Desktop{" "}
+            <em className="text-sky">Snowfall.</em>
             <br />
-            <em className="text-sky">winter</em> in.
+            <span className="text-[0.42em] font-sans font-normal tracking-normal text-deep/60">Let a little winter in.</span>
           </h1>
 
           <div className="max-w-[26rem] pb-3 lg:col-span-5 lg:justify-self-end">
             <p className="text-[1.125rem] leading-relaxed text-deep/85">
-              Snow falls. Windows gather frost. Snowballs roll. Somewhere on your desktop, a penguin is having a very
-              good day.
+              Desktop Snowfall is a free application that brings interactive snowfall to your Windows or Mac desktop. Snow drifts down, settles on your windows, and rolls into snowballs. Somewhere on your screen, a penguin is having a very good day.
             </p>
             <div className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-4">
               <a

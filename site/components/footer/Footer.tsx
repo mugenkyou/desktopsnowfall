@@ -12,14 +12,17 @@ export function Footer() {
             <span className="font-display text-[1.45rem] leading-none">Desktop Snowfall</span>
           </div>
           <p className="mt-4 max-w-xs text-[0.95rem] leading-relaxed text-muted">
-            Snow on your desktop, for Windows and macOS. Made by mugenkyou, one flake at a time.
+            Desktop Snowfall brings interactive snow, snowballs, snowmen and fairy lights to your Windows and macOS desktop. Free, open-source, and made by mugenkyou.
           </p>
         </div>
         <nav aria-label="Footer" className="grid grid-cols-2 gap-x-8 gap-y-2.5 text-[0.95rem] md:col-span-5 md:col-start-8">
-          <a href={site.repo} className="hover:text-sky">GitHub</a>
+          <a href="#experience" className="hover:text-sky">Experience</a>
+          <a href="#features" className="hover:text-sky">Features</a>
+          <a href="#platforms" className="hover:text-sky">Platform Comparison</a>
+          <a href="#install" className="hover:text-sky">Installation</a>
           <a href={site.download.windows} className="hover:text-sky">Download for Windows</a>
           <a href={site.download.mac} className="hover:text-sky">Download for macOS</a>
-          <a href="#install" className="hover:text-sky">Installation</a>
+          <a href={site.repo} className="hover:text-sky">GitHub</a>
           <a href={site.license} className="hover:text-sky">License</a>
           <a href={site.issues} className="hover:text-sky">Report a bug</a>
           <a href={site.features} className="hover:text-sky">Every feature</a>

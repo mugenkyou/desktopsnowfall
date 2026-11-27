@@ -19,5 +19,5 @@ export const site = {
     checksums: `${latest}/SHA256SUMS.txt`,
   },
   // Where the site will live; set SITE_URL when deploying (used for social previews and the sitemap)
-  url: process.env.SITE_URL ?? "http://localhost:3000",
+  url: process.env.SITE_URL ?? "https://desktopsnowfall.vercel.app",
 };

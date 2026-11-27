@@ -1,0 +1,61 @@
+# Desktop Snowfall
+
+> A free desktop application that brings interactive winter weather effects to Windows and macOS desktops.
+
+Desktop Snowfall is a native desktop application, not a wallpaper or browser extension. It runs on top of your real desktop, reacting to your windows, your mouse and the things you do.
+
+## Official Links
+
+- Website: https://desktopsnowfall.vercel.app
+- GitHub Repository: https://github.com/mugenkyou/desktopsnowfall
+- Downloads: https://github.com/mugenkyou/desktopsnowfall/releases
+
+## Supported Operating Systems
+
+- Windows 10 and 11 (x64 and Arm)
+- macOS 12 or later (Apple silicon and Intel)
+
+The Windows version currently has more features than macOS.
+
+## Main Features
+
+### Both Platforms
+- Multi-layer animated snowfall with three depth levels
+- Snow accumulation on window tops, desktop icons, and screen bottom
+- Snow flies off windows when you drag them
+- Rolling snowballs that grow as they roll through snow
+- Snowmen built by stacking three snowballs
+- Fairy lights along window tops
+- Light, Medium, and Heavy snow intensity settings
+
+### Windows Only
+- Wind gusts, crystal flakes, and sparkling flakes
+- Snowball physics: weight, collisions, trails, size modes
+- Throwing and shift-aiming snowballs with dotted flight paths
+- Snowmen that wobble, lose their nose, and can be bowled over
+- Interactive visitors: penguins, snow foxes, and rabbits with unique behaviors
+- Six fairy light color styles and six twinkle patterns
+- Multi-monitor support with snow crossing between screens
+- Start with Windows, battery saver mode
+
+## Installation
+
+### Windows
+Download the installer from the releases page. No administrator rights needed. The app appears in the system tray.
+
+### macOS
+Download the zip, drag the app to Applications. On first launch, go to System Settings > Privacy & Security > Open Anyway. For Dock snow, enable the Accessibility permission.
+
+## Technical Details
+
+- One source file per platform: Swift (SpriteKit) for macOS, C# (.NET 8, pure Win32) for Windows
+- No game engine, no Electron, no external packages
+- Everything is simulated and drawn in real time
+- Never connects to the internet
+- Free for personal and noncommercial use (PolyForm Noncommercial License 1.0.0)
+
+## Documentation
+
+- Features list: https://github.com/mugenkyou/desktopsnowfall/blob/main/FEATURES.md
+- Contributing guide: https://github.com/mugenkyou/desktopsnowfall/blob/main/CONTRIBUTING.md
+- Technical design: https://github.com/mugenkyou/desktopsnowfall/blob/main/TECHNICAL_DESIGN.md

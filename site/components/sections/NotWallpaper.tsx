@@ -19,8 +19,7 @@ export function NotWallpaper() {
             <em>wallpaper.</em>
           </h2>
           <p className="mt-7 max-w-sm text-[1.0625rem] leading-relaxed text-deep/80">
-            Desktop Snowfall lives on top of your actual desktop. It reacts to your windows, your mouse and the little
-            things you do. Everywhere but the snow itself, your clicks go straight through to whatever is underneath.
+            Desktop Snowfall is a native desktop application that lives on top of your actual desktop — not a wallpaper, screensaver, or browser extension. It reacts to your windows, your mouse and the little things you do. Everywhere but the snow itself, your clicks go straight through to whatever is underneath.
           </p>
 
           <ol className="mt-12 space-y-9 border-l border-hairline pl-6">
